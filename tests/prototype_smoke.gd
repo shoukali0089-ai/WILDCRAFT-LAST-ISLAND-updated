@@ -512,7 +512,10 @@ func _test_audio_system(game: Node3D, building_game: Node3D) -> void:
 	_check(manager.get("ui_voices").size() == 3, "AudioManager should use a bounded pool of UI voices.")
 	for bus_name in ["Music", "Environment", "SFX"]:
 		_check(AudioServer.get_bus_index(bus_name) >= 0, "Audio bus %s should exist." % bus_name)
-	_check(manager.play_event("wood_chop", Vector3.ZERO), "Known world sounds should play through the 3D voice pool.")
+	_check(
+		not manager.play_event("wood_chop", Vector3.ZERO),
+		"Missing licensed wood-chop audio should fail safely instead of synthesizing a replacement."
+	)
 	_check(manager.play_ui("ui_click"), "Known UI sounds should play through the UI voice pool.")
 	_check(not manager.play_event("not_a_sound", Vector3.ZERO), "Unknown sound names should fail safely.")
 	_check(not manager.play_ui("not_a_sound"), "Unknown UI sound names should fail safely.")
@@ -520,15 +523,53 @@ func _test_audio_system(game: Node3D, building_game: Node3D) -> void:
 	var asset_report: Dictionary = manager.get_missing_asset_report()
 	var sound_names: Array = manager.get_sound_names()
 	_check(sound_names.size() >= 35, "The sound manifest should include the requested sound categories.")
-	_check(
-		asset_report.size() == sound_names.size() + 7,
-		"Every required one-shot and ambience loop should be classified in the asset report."
-	)
+	_check(asset_report.size() == sound_names.size(), "Every sound event and ambience loop should have an asset status.")
+	var integrated_asset_count := 0
+	var unique_asset_paths: Dictionary = {}
 	for asset_name in asset_report:
-		_check(String(asset_report[asset_name]).begins_with("generated_placeholder"), "Sounds without external assets should be identified as generated placeholders.")
+		var asset_entry: Dictionary = asset_report[asset_name]
+		_check(
+			asset_entry["status"] in ["integrated", "surrogate", "fallback", "pending", "missing_file"],
+			"Every sound should be marked integrated, surrogate, fallback, or pending."
+		)
+		_check(asset_entry["status"] != "missing_file", "No configured audio asset should be missing from the project.")
+		for asset_path in asset_entry["files"]:
+			integrated_asset_count += 1
+			unique_asset_paths[asset_path] = true
+			_check(ResourceLoader.exists(asset_path), "Licensed audio file %s should exist." % asset_path)
+			var stream: AudioStream = manager.call("_load_audio_asset", asset_path)
+			_check(stream is AudioStreamOggVorbis, "Real asset %s should load as OGG audio." % asset_path)
+	var variation_fallback: AudioStream = manager.call(
+		"_load_first_available",
+		[
+			"res://assets/audio/oculus/missing-test-asset.ogg",
+			"res://assets/audio/oculus/FEETHmn_ShoeGrassRun_OS_01.ogg"
+		]
+	)
+	_check(
+		variation_fallback is AudioStreamOggVorbis,
+		"Missing variation files should fall through to the next real licensed take."
+	)
+	_check(integrated_asset_count >= 20, "The project should include a meaningful set of real audio assets.")
+	_check(unique_asset_paths.size() == 22, "All 22 bundled licensed OGG files should be referenced by the audio manager.")
+	_check(asset_report["deer_call"]["status"] == "pending", "Unavailable animal calls should remain pending, not use unrelated samples.")
+	_check(asset_report["thunder"]["status"] == "pending", "Unavailable thunder should remain pending.")
+	_check(asset_report["storm_rain"]["status"] == "fallback", "Storm rain should disclose its real light-rain fallback.")
+	_check(
+		asset_report["storm_rain"]["files"] == asset_report["light_rain"]["files"],
+		"Storm rain fallback should reuse the disclosed real foliage-rain recording."
+	)
 	for loop_name in manager.get("ambience_players"):
 		var ambience_player: AudioStreamPlayer = manager.get("ambience_players")[loop_name]
-		_check(ambience_player.stream is AudioStreamWAV, "Ambience loop %s should have a generated stream." % loop_name)
+		if asset_report[loop_name]["status"] == "pending":
+			_check(ambience_player.stream == null, "Pending ambience %s should not use generated audio." % loop_name)
+		else:
+			_check(
+				ambience_player.stream is AudioStreamOggVorbis,
+				"Ambience loop %s should use a licensed OGG stream." % loop_name
+			)
+			var ogg_loop: AudioStreamOggVorbis = ambience_player.stream as AudioStreamOggVorbis
+			_check(ogg_loop.loop, "Ambience loop %s should loop continuously." % loop_name)
 
 	_check(manager.get("weather_name") == "STORM", "Weather changes should reach the AudioManager.")
 	game.call("_update_day_cycle")
@@ -539,15 +580,15 @@ func _test_audio_system(game: Node3D, building_game: Node3D) -> void:
 		manager.get("day_phase") == expected_day_phase,
 		"Day/night phase should synchronize with the AudioManager."
 	)
-	_check(manager.get_play_attempt_count("wood_chop") > 0, "Successful wood gathering should trigger a chopping sound.")
-	_check(manager.get_play_attempt_count("stone_hit") > 0, "Successful stone gathering should trigger a stone sound.")
-	_check(manager.get_play_attempt_count("craft_axe") > 0, "Successful crafting should trigger a recipe sound.")
-	_check(manager.get_play_attempt_count("action_fail") > 0, "Failed gameplay actions should trigger a failure sound.")
-	_check(manager.get_play_attempt_count("lightning") > 0, "Storm lightning should trigger a positional audio event.")
+	_check(manager.get_play_attempt_count("wood_chop") > 0, "Successful wood gathering should retain its pending chopping-audio hook.")
+	_check(manager.get_play_attempt_count("stone_hit") > 0, "Successful rock gathering should retain its pending stone-audio hook.")
+	_check(manager.get_resolved_play_count("craft_axe") > 0, "Successful crafting should resolve to the real UI-confirmation fallback.")
+	_check(manager.get_resolved_play_count("action_fail") > 0, "Failed gameplay actions should resolve to real error UI feedback.")
+	_check(manager.get_play_attempt_count("lightning") > 0, "Storm lightning should retain its pending positional-audio hook.")
 	var building_audio: Node = building_game.get("audio_manager")
 	_check(
-		building_audio.get_play_attempt_count("build_foundation") > 0,
-		"Successful foundation placement should trigger a positional construction sound."
+		building_audio.get_resolved_play_count("build_foundation") > 0,
+		"Successful foundation placement should resolve to the real wooden-impact fallback."
 	)
 	var animals: Array = game.get("wildlife_system").get_animals()
 	var wildlife_sound_count: int = (
@@ -558,13 +599,16 @@ func _test_audio_system(game: Node3D, building_game: Node3D) -> void:
 		+ int(manager.get_play_attempt_count("deer_step"))
 		+ int(manager.get_play_attempt_count("boar_step"))
 	)
-	_check(not animals.is_empty() and wildlife_sound_count > 0, "Wildlife state or movement changes should trigger positional animal sounds.")
+	_check(not animals.is_empty() and wildlife_sound_count > 0, "Wildlife state or movement changes should retain their positional-audio hooks.")
 
-	manager.play_event("tree_impact", Vector3.ZERO, 0)
+	_check(
+		manager.play_event("footstep_grass", Vector3.ZERO, 0),
+		"An integrated real footstep should play through the 3D voice pool."
+	)
 	var world_voices: Array = manager.get("world_voices")
 	var active_voice: AudioStreamPlayer3D
 	for voice in world_voices:
-		if voice.playing:
+		if voice.stream is AudioStreamOggVorbis:
 			active_voice = voice
 			break
 	if manager.get("audio_output_available"):
@@ -632,7 +676,7 @@ func _test_audio_system(game: Node3D, building_game: Node3D) -> void:
 	game.get("audio_settings_back_button").pressed.emit()
 	game.call("_set_main_menu_open", false)
 	game.get_parent().size = Vector2i(360, 800)
-	print("PASS: audio initialization, gameplay event hooks, placeholders, settings, app pause/resume, and mobile layout")
+	print("PASS: real audio assets, missing-asset handling, gameplay hooks, settings, pause/resume, and mobile layout")
 
 
 func _test_save_system(game: Node3D, mobile_game: Node3D) -> void:
