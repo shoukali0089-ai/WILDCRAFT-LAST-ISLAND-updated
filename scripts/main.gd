@@ -8,6 +8,7 @@ const RECIPE_ICON_SCRIPT := preload("res://scripts/recipe_icon.gd")
 const CRAFTING_SYSTEM_SCRIPT := preload("res://scripts/crafting_system.gd")
 const BUILDING_SYSTEM_SCRIPT := preload("res://scripts/building_system.gd")
 const WILDLIFE_SYSTEM_SCRIPT := preload("res://scripts/wildlife_system.gd")
+const WEATHER_SYSTEM_SCRIPT := preload("res://scripts/weather_system.gd")
 
 const ISLAND_RADIUS := 48.0
 const TERRAIN_STEPS := 56
@@ -17,6 +18,8 @@ var player: CharacterBody3D
 var terrain_body: StaticBody3D
 var building_system: Node3D
 var wildlife_system: Node3D
+var weather_system: Node3D
+var weather_wind_parts: Array[Node3D] = []
 var inventory := {"wood": 0, "fiber": 0, "stone": 0, "berries": 0}
 var health := 100.0
 var hunger := 100.0
@@ -29,6 +32,8 @@ var environment: WorldEnvironment
 var prompt_label: Label
 var inventory_label: Label
 var time_label: Label
+var weather_status_panel: PanelContainer
+var weather_status_label: Label
 var health_bar: ProgressBar
 var hunger_bar: ProgressBar
 var thirst_bar: ProgressBar
@@ -75,6 +80,16 @@ func _ready() -> void:
 			wildlife_obstacles.append(child)
 	wildlife_system.configure(terrain_body, player, wildlife_obstacles, ISLAND_RADIUS)
 	add_child(wildlife_system)
+	weather_system = WEATHER_SYSTEM_SCRIPT.new()
+	weather_system.name = "WeatherSystem"
+	weather_system.configure(
+		environment,
+		sun,
+		player,
+		Callable(building_system, "is_position_sheltered"),
+		weather_wind_parts
+	)
+	add_child(weather_system)
 	_build_hud()
 
 
@@ -279,6 +294,7 @@ func _add_palm(point: Vector3, scale_factor: float) -> void:
 		frond.quaternion = Quaternion(Vector3.UP, direction)
 		frond.material_override = _material(Color(0.12, 0.38, 0.18))
 		tree.add_child(frond)
+		weather_wind_parts.append(frond)
 
 
 func _add_rock(point: Vector3, scale_factor: float) -> void:
@@ -362,6 +378,29 @@ func _build_hud() -> void:
 	time_label.position = Vector2(18.0, 151.0)
 	time_label.add_theme_font_size_override("font_size", 18)
 	root.add_child(time_label)
+
+	weather_status_panel = PanelContainer.new()
+	weather_status_panel.name = "WeatherStatus"
+	weather_status_panel.position = Vector2(18.0, 188.0)
+	weather_status_panel.custom_minimum_size = Vector2(226.0, 48.0)
+	var weather_style := StyleBoxFlat.new()
+	weather_style.bg_color = Color(0.06, 0.13, 0.17, 0.84)
+	weather_style.border_color = Color(0.55, 0.69, 0.75, 0.72)
+	weather_style.set_border_width_all(1)
+	weather_style.set_corner_radius_all(8)
+	weather_style.content_margin_left = 10.0
+	weather_style.content_margin_right = 10.0
+	weather_style.content_margin_top = 6.0
+	weather_style.content_margin_bottom = 6.0
+	weather_status_panel.add_theme_stylebox_override("panel", weather_style)
+	weather_status_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	root.add_child(weather_status_panel)
+	weather_status_label = Label.new()
+	weather_status_label.name = "WeatherAndTemperature"
+	weather_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	weather_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	weather_status_label.add_theme_font_size_override("font_size", 16)
+	weather_status_panel.add_child(weather_status_label)
 
 	inventory_label = Label.new()
 	inventory_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
@@ -633,6 +672,7 @@ func _set_build_mode_active(active: bool) -> void:
 		_set_crafting_menu_open(false)
 	build_mode_active = active
 	build_menu.visible = active
+	weather_status_panel.visible = not active and not crafting_menu.visible
 	build_mode_button.text = "EXIT BUILD" if active else "BUILD"
 	interact_button.visible = not active
 	craft_menu_button.visible = not active
@@ -729,6 +769,7 @@ func _set_crafting_menu_open(open: bool) -> void:
 	if open and build_mode_active:
 		_set_build_mode_active(false)
 	crafting_menu.visible = open
+	weather_status_panel.visible = not open and not build_mode_active
 	joystick_control.visible = not open
 	look_control.visible = not open
 	interact_button.visible = not open
@@ -822,6 +863,9 @@ func _gather_nearby() -> void:
 func _update_survival(delta: float) -> void:
 	hunger = maxf(0.0, hunger - 0.1 * delta)
 	thirst = maxf(0.0, thirst - 0.15 * delta)
+	if is_instance_valid(weather_system):
+		if weather_system.temperature < 18.0 and not weather_system.is_player_sheltered:
+			hunger = maxf(0.0, hunger - 0.025 * delta)
 	if hunger <= 0.0 or thirst <= 0.0:
 		health = maxf(0.0, health - 0.12 * delta)
 
@@ -831,8 +875,11 @@ func _update_day_cycle() -> void:
 	var sun_angle := day_phase * TAU - PI * 0.5
 	sun.rotation = Vector3(sun_angle, deg_to_rad(-30.0), 0.0)
 	var daylight := clampf(sin(day_phase * TAU) * 0.65 + 0.5, 0.12, 1.0)
-	sun.light_energy = daylight * 1.35
-	environment.environment.ambient_light_energy = 0.25 + daylight * 0.48
+	if is_instance_valid(weather_system):
+		weather_system.set_daylight(daylight)
+	else:
+		sun.light_energy = daylight * 1.35
+		environment.environment.ambient_light_energy = 0.25 + daylight * 0.48
 	var hour := int(day_phase * 24.0)
 	var minute := int(fposmod(day_phase * 1440.0, 60.0))
 	time_label.text = "Day %d  •  %02d:%02d" % [int(elapsed_game_time / day_length_seconds) + 1, hour, minute]
@@ -844,6 +891,8 @@ func _update_hud() -> void:
 	thirst_bar.value = thirst
 	if is_instance_valid(build_menu_title):
 		build_menu_title.text = "BUILD MODE  •  %d WOOD" % int(inventory.get("wood", 0))
+	if is_instance_valid(weather_status_label) and is_instance_valid(weather_system):
+		weather_status_label.text = weather_system.get_display_text()
 	inventory_label.text = "PACK\nWood   %d\nFiber   %d\nStone  %d\nBerries %d\n\nCRAFTED\nStone Axe %d\nCampfire %d\nSpear %d" % [
 		inventory.get("wood", 0),
 		inventory.get("fiber", 0),

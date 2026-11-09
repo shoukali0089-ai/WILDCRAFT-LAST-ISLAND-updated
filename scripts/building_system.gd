@@ -128,6 +128,31 @@ func place(component_id: String, target: Vector3, rotation_steps: int, inventory
 	}
 
 
+func is_position_sheltered(position: Vector3) -> bool:
+	for grid_key in foundations:
+		var foundation: StaticBody3D = foundations[grid_key]
+		if not is_instance_valid(foundation) or not roof_occupancy.has(grid_key):
+			continue
+		if not is_instance_valid(roof_occupancy[grid_key]):
+			continue
+		if absf(position.x - foundation.position.x) > 1.55:
+			continue
+		if absf(position.z - foundation.position.z) > 1.55:
+			continue
+		if position.y < foundation.position.y - 0.5 or position.y > foundation.position.y + 2.6:
+			continue
+		var occupied_edges: Dictionary = {}
+		var has_door := false
+		for slot in edge_occupancy.values():
+			if slot["grid_key"] != grid_key:
+				continue
+			occupied_edges[slot["edge_name"]] = true
+			has_door = has_door or slot["component_id"] == "wooden_door"
+		if has_door and occupied_edges.size() == EDGE_NAMES.size():
+			return true
+	return false
+
+
 func _foundation_preview(target: Vector3, rotation_steps: int) -> Dictionary:
 	var grid_x := roundi(target.x / GRID_SIZE)
 	var grid_z := roundi(target.z / GRID_SIZE)

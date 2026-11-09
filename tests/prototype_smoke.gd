@@ -226,12 +226,13 @@ func _run() -> void:
 	game.call("_update_day_cycle")
 	_check(not String(game.get("time_label").text).is_empty(), "The day/night clock should update.")
 	await _test_wildlife(game)
+	await _test_weather(game, building_game)
 
 	if test_failed:
-		push_error("Prototype, crafting, building, or wildlife tests failed.")
+		push_error("Prototype, crafting, building, wildlife, or weather tests failed.")
 		quit(1)
 	else:
-		print("Prototype, crafting, building, and wildlife smoke tests passed.")
+		print("Prototype, crafting, building, wildlife, and weather smoke tests passed.")
 		quit()
 
 
@@ -352,6 +353,28 @@ func _test_building_system(game: Node3D) -> void:
 	_check(space.intersect_ray(wall_crossing).get("collider") == wall, "A placed wall should block passage with its collision.")
 	print("PASS: door and roof placement, costs, collisions, and accessible doorway")
 
+	_check(
+		not building_system.is_position_sheltered(foundation.global_position + Vector3(0.0, 0.31, 0.0)),
+		"A roof and partial walls must not provide shelter protection."
+	)
+	var edge_offsets: Array[Vector3] = [
+		Vector3(0.0, 0.3, -1.9),
+		Vector3(1.9, 0.3, 0.0),
+		Vector3(0.0, 0.3, 1.9),
+		Vector3(-1.9, 0.3, 0.0)
+	]
+	for edge_offset in edge_offsets:
+		var edge_target: Vector3 = foundation.global_position + edge_offset
+		var edge_preview: Dictionary = building_system.get_preview_at("wooden_wall", edge_target)
+		if edge_preview["valid"]:
+			var enclosure_result: Dictionary = building_system.place("wooden_wall", edge_target, 0, inventory)
+			_check(enclosure_result["success"], "Remaining shelter walls should place successfully.")
+	_check(
+		building_system.is_position_sheltered(foundation.global_position + Vector3(0.0, 0.31, 0.0)),
+		"A roofed foundation with all perimeter edges and a door must provide shelter protection."
+	)
+	print("PASS: shelter protection requires a roofed, enclosed foundation with a doorway")
+
 	var wildlife_system: Node3D = game.get("wildlife_system")
 	var wildlife: Array[CharacterBody3D] = wildlife_system.get_animals()
 	var walking_animal: CharacterBody3D = wildlife[0]
@@ -386,6 +409,83 @@ func _test_building_system(game: Node3D) -> void:
 	_check(player.global_position.x < door.global_position.x - 0.4, "Player should re-enter through the open doorway.")
 	player.set_move_input(Vector2.ZERO)
 	print("PASS: player enters and exits through the shelter doorway")
+
+
+func _test_weather(game: Node3D, sheltered_game: Node3D) -> void:
+	var weather: Node3D = game.get("weather_system")
+	_check(is_instance_valid(weather), "The main scene should initialize a weather manager.")
+	if not is_instance_valid(weather):
+		return
+
+	var weather_names := ["SUNNY", "CLOUDY", "RAINY", "STORM"]
+	for weather_name in weather_names:
+		_check(weather.set_weather(weather_name, 0.1), "Weather state %s should be selectable." % weather_name)
+		weather.call("_process", 0.1)
+		weather.call("_process", 0.1)
+		_check(weather.get_weather_name() == weather_name, "Weather state should update to %s." % weather_name)
+		_check(weather.get("transition_remaining") == 0.0, "Weather transition to %s should complete smoothly." % weather_name)
+
+	var cloud_layer: MultiMeshInstance3D = weather.get("cloud_layer")
+	var rain_particles: GPUParticles3D = weather.get("rain_particles")
+	var lightning_root: Node3D = weather.get("lightning_root")
+	var lightning_light: OmniLight3D = weather.get("lightning_light")
+	_check(cloud_layer.multimesh.instance_count == 8, "Cloud effects should use the capped procedural multimesh.")
+	_check(rain_particles.amount == 360, "Rain particles should stay within the mobile particle budget.")
+	_check(rain_particles.emitting, "Rain should initialize and emit in rainy weather.")
+	_check(lightning_root.get_child_count() == 8, "Storm lightning should initialize procedural segments and a flash light.")
+	weather.call("_trigger_lightning")
+	_check(lightning_root.visible and lightning_light.light_energy > 0.0, "Storm lightning should show a flash.")
+
+	weather.set("automatic_weather_enabled", true)
+	weather.set("weather_remaining", 0.0)
+	weather.call("_process", 0.1)
+	_check(weather.get_weather_name() != "STORM", "Automatic weather should transition after its duration expires.")
+
+	weather.set("temperature", 24.0)
+	weather.set("is_player_sheltered", false)
+	weather.set_weather("STORM", 0.1)
+	for frame_index in range(20):
+		weather.call("_process", 0.25)
+	_check(weather.get("temperature") < 24.0, "Storm exposure should gradually lower temperature.")
+	_check(weather.get("temperature") >= 0.0, "Temperature should remain non-negative.")
+	game.call("_update_hud")
+	_check(
+		String(game.get("weather_status_label").text).contains("STORM")
+		or String(game.get("weather_status_label").text).contains("RAIN"),
+		"Weather HUD should display the active weather and temperature."
+	)
+
+	var mobile_viewport: SubViewport = game.get_parent()
+	var weather_panel: Control = game.get("weather_status_panel")
+	for viewport_size in [Vector2i(360, 800), Vector2i(800, 450)]:
+		mobile_viewport.size = viewport_size
+		await process_frame
+		var panel_rect := weather_panel.get_global_rect()
+		_check(panel_rect.position.x >= 0.0 and panel_rect.end.x <= viewport_size.x, "Weather HUD should fit a mobile viewport width.")
+		_check(panel_rect.position.y >= 0.0 and panel_rect.end.y <= viewport_size.y, "Weather HUD should fit a mobile viewport height.")
+	game.get("craft_menu_button").pressed.emit()
+	await process_frame
+	_check(not weather_panel.visible, "Weather HUD should hide while the crafting menu is open.")
+	game.get("craft_menu_close_button").pressed.emit()
+	game.get("build_mode_button").pressed.emit()
+	_check(not weather_panel.visible, "Weather HUD should hide while Build Mode is open.")
+	game.get("build_cancel_button").pressed.emit()
+
+	var protected_weather: Node3D = sheltered_game.get("weather_system")
+	var shelter_building: Node3D = sheltered_game.get("building_system")
+	var shelter_foundation: StaticBody3D = shelter_building.get("foundations").values()[0]
+	var protected_player: CharacterBody3D = sheltered_game.get("player")
+	protected_player.global_position = shelter_foundation.global_position + Vector3(0.0, 0.31, 0.0)
+	protected_weather.call("refresh_shelter_state")
+	_check(protected_weather.get("is_player_sheltered"), "A player inside a completed shelter should be protected.")
+	protected_weather.set("temperature", 20.0)
+	for frame_index in range(20):
+		protected_weather.call("_process", 0.25)
+	_check(protected_weather.get("temperature") > 20.0, "Shelter should prevent cold exposure and move temperature toward a safe value.")
+	shelter_building.get("roof_occupancy").clear()
+	protected_weather.call("refresh_shelter_state")
+	_check(not protected_weather.get("is_player_sheltered"), "Removing a roof must remove shelter protection.")
+	print("PASS: weather states, transitions, effects, temperature, shelter protection, HUD, and mobile layout")
 
 
 func _test_wildlife(game: Node3D) -> void:

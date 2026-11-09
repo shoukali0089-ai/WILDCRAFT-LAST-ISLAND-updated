@@ -23,7 +23,9 @@ Shelter pieces cost 6 Wood for a foundation, 4 Wood for a wall, 3 Wood for a doo
 
 Four procedural animals spawn on clear island ground: deer flee from nearby players, while wild boars remain calm at a distance and defend themselves when approached closely. They idle, wander around their home areas, react to the player, flee or defend as appropriate, and return home after the threat moves away. Animal AI makes decisions four times per second and uses simple collision shapes.
 
-Run the headless prototype, crafting, shelter, and wildlife smoke tests with `godot --headless --path . --script res://tests/prototype_smoke.gd`. It checks scene startup, mobile controls and layouts, movement, gathering, all recipes, material deductions, shelter placement and collisions, animal spawning and AI transitions, wildlife movement bounds, HUD updates, survival decay, and the clock.
+Weather transitions among sunny, cloudy, rainy, and storm conditions. Clouds, capped rain particles, wind sway, and storm lightning are procedurally generated; thunder audio is optional and has no built-in asset. The weather HUD shows the current condition and gradual temperature. Cold outdoor exposure below 18 C slightly increases hunger drain. A player is sheltered only while inside a foundation with a roof, all four perimeter edges occupied, and at least one door; open or partial builds do not protect the player.
+
+Run the headless prototype, crafting, shelter, wildlife, and weather smoke tests with `godot --headless --path . --script res://tests/prototype_smoke.gd`. It checks scene startup, mobile controls and layouts, movement, gathering, all recipes, material deductions, shelter placement, collisions and weather protection, animal spawning and AI transitions, weather states and effects, temperature progression, HUD updates, survival decay, and the clock.
 
 ## Prototype contents
 
@@ -34,8 +36,9 @@ Run the headless prototype, crafting, shelter, and wildlife smoke tests with `go
 - Mobile-friendly shelter building with procedural foundations, walls, doors, roofs, placement previews, snapping, rotation, and wood costs.
 - Procedural deer and wild boars with distance-based detection, wandering, fleeing, defensive behavior, return-home movement, and obstacle avoidance.
 - Health, hunger, and thirst meters plus a continuous day/night lighting cycle.
+- Procedural sunny, cloudy, rainy, and storm weather with gradual transitions, temperature, shelter protection, rain, wind sway, and lightning.
 - Godot's Compatibility renderer and primitive-only assets for a modest mobile rendering baseline.
 
 ## Not implemented yet
 
-Wildlife combat damage or hunting, weather effects, consumable use, local save/load, campfire placement, spear combat, and mobile export configuration are planned follow-up work. They are intentionally not presented as working features in this prototype.
+Wildlife combat damage or hunting, consumable use, local save/load, campfire placement, spear combat, and mobile export configuration are planned follow-up work. Thunder audio requires assigning an audio stream; shelter protection currently checks complete four-sided enclosures only. These limitations are intentionally not presented as working features.
