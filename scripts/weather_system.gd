@@ -1,6 +1,7 @@
 extends Node3D
 
 signal weather_changed(weather_name: String)
+signal lightning_struck(position: Vector3)
 
 enum WeatherState { SUNNY, CLOUDY, RAINY, STORM }
 
@@ -424,6 +425,7 @@ func _trigger_lightning() -> void:
 	lightning_visible_time = 0.16
 	lightning_flash = 0.85
 	lightning_light.light_energy = 4.0
+	lightning_struck.emit(lightning_root.global_position)
 	if thunder_player.stream != null:
 		thunder_player.global_position = lightning_root.global_position
 		thunder_player.play()

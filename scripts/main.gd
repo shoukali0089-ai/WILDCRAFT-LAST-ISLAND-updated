@@ -10,6 +10,7 @@ const BUILDING_SYSTEM_SCRIPT := preload("res://scripts/building_system.gd")
 const WILDLIFE_SYSTEM_SCRIPT := preload("res://scripts/wildlife_system.gd")
 const WEATHER_SYSTEM_SCRIPT := preload("res://scripts/weather_system.gd")
 const SAVE_MANAGER_SCRIPT := preload("res://scripts/save_manager.gd")
+const AUDIO_MANAGER_SCRIPT := preload("res://scripts/audio_manager.gd")
 
 const ISLAND_RADIUS := 48.0
 const TERRAIN_STEPS := 56
@@ -21,6 +22,7 @@ var building_system: Node3D
 var wildlife_system: Node3D
 var weather_system: Node3D
 var save_manager: RefCounted
+var audio_manager: Node
 var weather_wind_parts: Array[Node3D] = []
 var inventory := {"wood": 0, "fiber": 0, "stone": 0, "berries": 0}
 var health := 100.0
@@ -42,6 +44,11 @@ var main_menu_status_label: Label
 var continue_game_button: Button
 var delete_confirmation_dialog: ConfirmationDialog
 var new_game_confirmation_dialog: ConfirmationDialog
+var audio_settings_panel: PanelContainer
+var audio_settings_button: Button
+var audio_settings_back_button: Button
+var audio_sliders: Dictionary = {}
+var audio_mute_buttons: Dictionary = {}
 var health_bar: ProgressBar
 var hunger_bar: ProgressBar
 var thirst_bar: ProgressBar
@@ -75,16 +82,31 @@ var main_menu_open := false
 var last_load_error := ""
 
 
+func _notification(what: int) -> void:
+	if not is_instance_valid(audio_manager):
+		return
+	if what == NOTIFICATION_APPLICATION_PAUSED:
+		if is_instance_valid(save_manager):
+			_save_current_game(true)
+		audio_manager.pause_audio(true)
+	elif what == NOTIFICATION_APPLICATION_RESUMED:
+		audio_manager.pause_audio(false)
+
+
 func _ready() -> void:
 	_build_environment()
 	_build_island()
 	_scatter_resources()
 	_spawn_player()
+	audio_manager = AUDIO_MANAGER_SCRIPT.new()
+	audio_manager.name = "AudioManager"
+	add_child(audio_manager)
 	crafting_system = CRAFTING_SYSTEM_SCRIPT.new()
 	building_system = BUILDING_SYSTEM_SCRIPT.new()
 	building_system.name = "BuildingSystem"
 	add_child(building_system)
 	building_system.configure(terrain_body, player)
+	building_system.structure_placed.connect(_on_structure_placed)
 	wildlife_system = WILDLIFE_SYSTEM_SCRIPT.new()
 	wildlife_system.name = "WildlifeSystem"
 	var wildlife_obstacles: Array[Node3D] = []
@@ -103,6 +125,8 @@ func _ready() -> void:
 		weather_wind_parts
 	)
 	add_child(weather_system)
+	weather_system.weather_changed.connect(audio_manager.set_weather)
+	weather_system.lightning_struck.connect(_on_lightning_struck)
 	save_manager = SAVE_MANAGER_SCRIPT.new()
 	_build_hud()
 
@@ -555,8 +579,11 @@ func _build_main_menu(parent: Control) -> void:
 	save_button.pressed.connect(_save_and_return)
 	var delete_button := _add_menu_button(column, "DELETE SAVE")
 	delete_button.pressed.connect(_request_save_deletion)
+	audio_settings_button = _add_menu_button(column, "AUDIO SETTINGS")
+	audio_settings_button.pressed.connect(_open_audio_settings)
 	var return_button := _add_menu_button(column, "RETURN TO GAME")
 	return_button.pressed.connect(func() -> void: _set_main_menu_open(false))
+	_build_audio_settings(parent)
 
 	delete_confirmation_dialog = ConfirmationDialog.new()
 	delete_confirmation_dialog.title = "Delete local save?"
@@ -569,6 +596,76 @@ func _build_main_menu(parent: Control) -> void:
 	new_game_confirmation_dialog.dialog_text = "Starting over deletes the existing local save. Continue?"
 	new_game_confirmation_dialog.confirmed.connect(_start_new_game)
 	parent.add_child(new_game_confirmation_dialog)
+
+
+func _build_audio_settings(parent: Control) -> void:
+	audio_settings_panel = PanelContainer.new()
+	audio_settings_panel.name = "AudioSettings"
+	audio_settings_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
+	audio_settings_panel.set_anchor(SIDE_LEFT, 0.04)
+	audio_settings_panel.set_anchor(SIDE_TOP, 0.12)
+	audio_settings_panel.set_anchor(SIDE_RIGHT, 0.96)
+	audio_settings_panel.set_anchor(SIDE_BOTTOM, 0.88)
+	audio_settings_panel.add_theme_stylebox_override("panel", _make_menu_panel_style())
+	audio_settings_panel.hide()
+	main_menu.add_child(audio_settings_panel)
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 6)
+	audio_settings_panel.add_child(column)
+	var title := Label.new()
+	title.text = "AUDIO SETTINGS"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 25)
+	column.add_child(title)
+	for bus_name in ["Master", "Music", "Environment", "SFX"]:
+		var row := HBoxContainer.new()
+		row.add_theme_constant_override("separation", 4)
+		column.add_child(row)
+		var label := Label.new()
+		label.text = bus_name
+		label.custom_minimum_size.x = 74.0
+		label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		row.add_child(label)
+		var slider := HSlider.new()
+		slider.min_value = 0.0
+		slider.max_value = 1.0
+		slider.step = 0.01
+		slider.custom_minimum_size = Vector2(76.0, 40.0)
+		slider.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+		slider.value = audio_manager.get_bus_volume(bus_name)
+		slider.value_changed.connect(_on_audio_volume_changed.bind(bus_name))
+		row.add_child(slider)
+		audio_sliders[bus_name] = slider
+		var mute := CheckButton.new()
+		mute.text = "Mute"
+		mute.custom_minimum_size = Vector2(68.0, 48.0)
+		mute.button_pressed = audio_manager.is_bus_muted(bus_name)
+		mute.toggled.connect(_on_audio_mute_toggled.bind(bus_name))
+		row.add_child(mute)
+		audio_mute_buttons[bus_name] = mute
+	audio_settings_back_button = _add_menu_button(column, "BACK")
+	audio_settings_back_button.pressed.connect(_close_audio_settings)
+
+
+func _open_audio_settings() -> void:
+	main_menu.get_child(1).hide()
+	audio_settings_panel.show()
+
+
+func _close_audio_settings() -> void:
+	audio_settings_panel.hide()
+	main_menu.get_child(1).show()
+
+
+func _on_audio_volume_changed(value: float, bus_name: String) -> void:
+	audio_manager.set_bus_volume(bus_name, value)
+	var mute_button: CheckButton = audio_mute_buttons[bus_name]
+	mute_button.set_pressed_no_signal(value <= 0.0)
+
+
+func _on_audio_mute_toggled(muted: bool, bus_name: String) -> void:
+	audio_manager.set_bus_muted(bus_name, muted)
 
 
 func _make_menu_panel_style() -> StyleBoxFlat:
@@ -601,6 +698,9 @@ func _set_main_menu_open(open: bool) -> void:
 		_set_build_mode_active(false)
 	main_menu_open = open
 	main_menu.visible = open
+	if not open:
+		audio_settings_panel.hide()
+		main_menu.get_child(1).show()
 	main_menu_button.visible = not open
 	if is_instance_valid(continue_game_button):
 		continue_game_button.disabled = not save_manager.has_valid_save()
@@ -861,6 +961,8 @@ func _place_building() -> void:
 		inventory
 	)
 	_show_notification(result["message"], bool(result["success"]))
+	if not bool(result["success"]):
+		audio_manager.play_ui("action_fail")
 	_update_hud()
 	_update_build_preview()
 	if bool(result["success"]):
@@ -989,11 +1091,30 @@ func _set_crafting_menu_open(open: bool) -> void:
 func _craft_recipe(recipe_id: String) -> bool:
 	var result: Dictionary = crafting_system.craft(recipe_id, inventory)
 	_show_notification(result["message"], bool(result["success"]))
+	if bool(result["success"]):
+		var craft_sound: String = {
+			"stone_axe": "craft_axe",
+			"wooden_spear": "craft_spear",
+			"campfire": "craft_campfire"
+		}.get(recipe_id, "ui_click")
+		audio_manager.play_ui(craft_sound)
+	else:
+		audio_manager.play_ui("action_fail")
 	_update_crafting_menu()
 	_update_hud()
 	if bool(result["success"]):
 		_save_current_game(true)
 	return bool(result["success"])
+
+
+func _on_structure_placed(component_id: String, position: Vector3) -> void:
+	var structure_sound: String = {
+		"wooden_foundation": "build_foundation",
+		"wooden_wall": "build_wall",
+		"wooden_door": "build_door",
+		"wooden_roof": "build_roof"
+	}.get(component_id, "build_wall")
+	audio_manager.play_event(structure_sound, position)
 
 
 func _show_notification(message: String, success: bool) -> void:
@@ -1053,14 +1174,33 @@ func _update_nearby_resource() -> void:
 func _gather_nearby() -> void:
 	if not is_instance_valid(nearby_resource):
 		return
+	var resource := nearby_resource
+	var resource_name := String(resource.get("display_name"))
+	var uses_before_gather := int(resource.get("gathers_left"))
 	var result: Dictionary = nearby_resource.gather()
 	if result.is_empty():
 		return
-	if nearby_resource.get("display_name") == "Palm tree" and int(inventory.get("stone_axe", 0)) > 0:
+	if resource_name == "Palm tree" and int(inventory.get("stone_axe", 0)) > 0:
 		result["wood"] = int(result.get("wood", 0)) + 1
 	for item in result:
 		var item_key := String(item)
 		inventory[item_key] = int(inventory.get(item_key, 0)) + int(result[item])
+	match resource_name:
+		"Palm tree":
+			audio_manager.play_event("wood_chop", resource.global_position)
+			audio_manager.play_event("tree_impact", resource.global_position, 120)
+			audio_manager.play_ui("pickup_wood")
+			if uses_before_gather == 1:
+				audio_manager.play_event("tree_fall", resource.global_position, 200)
+				audio_manager.play_event("wood_break", resource.global_position, 220)
+		"Rock":
+			audio_manager.play_event("stone_hit", resource.global_position)
+			audio_manager.play_ui("pickup_stone")
+			if uses_before_gather == 1:
+				audio_manager.play_event("stone_crack", resource.global_position, 200)
+				audio_manager.play_event("stone_break", resource.global_position, 220)
+		"Berry bush":
+			audio_manager.play_ui("pickup_berries")
 	_update_hud()
 	_save_current_game(true)
 
@@ -1080,6 +1220,8 @@ func _update_day_cycle() -> void:
 	var sun_angle := day_phase * TAU - PI * 0.5
 	sun.rotation = Vector3(sun_angle, deg_to_rad(-30.0), 0.0)
 	var daylight := clampf(sin(day_phase * TAU) * 0.65 + 0.5, 0.12, 1.0)
+	if is_instance_valid(audio_manager):
+		audio_manager.set_day_phase(day_phase)
 	if is_instance_valid(weather_system):
 		weather_system.set_daylight(daylight)
 	else:
@@ -1088,6 +1230,14 @@ func _update_day_cycle() -> void:
 	var hour := int(day_phase * 24.0)
 	var minute := int(fposmod(day_phase * 1440.0, 60.0))
 	time_label.text = "Day %d  •  %02d:%02d" % [int(elapsed_game_time / day_length_seconds) + 1, hour, minute]
+
+
+func _on_lightning_struck(position: Vector3) -> void:
+	if not is_instance_valid(audio_manager):
+		return
+	audio_manager.play_3d("lightning", position, "Environment", -4.0, 100)
+	if weather_system.thunder_stream == null:
+		audio_manager.play_3d("thunder", position, "Environment", -8.0, 500)
 
 
 func _update_hud() -> void:

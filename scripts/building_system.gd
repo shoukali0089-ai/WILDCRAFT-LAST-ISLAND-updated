@@ -1,5 +1,7 @@
 extends Node3D
 
+signal structure_placed(component_id: String, position: Vector3)
+
 const COMPONENT_SCRIPT := preload("res://scripts/building_component.gd")
 const GRID_SIZE := 4.0
 const TERRAIN_RAY_TOP := 100.0
@@ -121,6 +123,7 @@ func place(component_id: String, target: Vector3, rotation_steps: int, inventory
 		roof_occupancy[preview["grid_key"]] = structure
 
 	inventory["wood"] = available - cost
+	structure_placed.emit(component_id, structure.global_position)
 	return {
 		"success": true,
 		"message": "Placed %s." % COMPONENTS[component_id]["name"],

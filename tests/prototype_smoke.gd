@@ -5,6 +5,7 @@ const JOYSTICK_SCRIPT := preload("res://scripts/virtual_joystick.gd")
 const TOUCH_LOOK_SCRIPT := preload("res://scripts/touch_look.gd")
 const HARVESTABLE_SCRIPT := preload("res://scripts/harvestable.gd")
 const SAVE_TEST_PATH := "user://wildcraft_prototype_smoke_save.json"
+const AUDIO_SETTINGS_TEST_PATH := "user://wildcraft_audio_smoke_settings.cfg"
 
 var test_failed := false
 
@@ -232,13 +233,20 @@ func _run() -> void:
 	_check(not String(game.get("time_label").text).is_empty(), "The day/night clock should update.")
 	await _test_wildlife(game)
 	await _test_weather(game, building_game)
+	await _test_audio_system(game, building_game)
 	await _test_save_system(building_game, game)
 
+	root.remove_child(building_game)
+	building_game.free()
+	root.remove_child(mobile_viewport)
+	mobile_viewport.free()
+	await process_frame
+
 	if test_failed:
-		push_error("Prototype, crafting, building, wildlife, weather, or save tests failed.")
+		push_error("Prototype, crafting, building, wildlife, weather, audio, or save tests failed.")
 		quit(1)
 	else:
-		print("Prototype, crafting, building, wildlife, weather, and save smoke tests passed.")
+		print("Prototype, crafting, building, wildlife, weather, audio, and save smoke tests passed.")
 		quit()
 
 
@@ -494,6 +502,139 @@ func _test_weather(game: Node3D, sheltered_game: Node3D) -> void:
 	print("PASS: weather states, transitions, effects, temperature, shelter protection, HUD, and mobile layout")
 
 
+func _test_audio_system(game: Node3D, building_game: Node3D) -> void:
+	var manager: Node = game.get("audio_manager")
+	_check(is_instance_valid(manager), "The game should initialize its AudioManager.")
+	if not is_instance_valid(manager):
+		return
+
+	_check(manager.get("world_voices").size() == 12, "AudioManager should use a bounded pool of 3D voices.")
+	_check(manager.get("ui_voices").size() == 3, "AudioManager should use a bounded pool of UI voices.")
+	for bus_name in ["Music", "Environment", "SFX"]:
+		_check(AudioServer.get_bus_index(bus_name) >= 0, "Audio bus %s should exist." % bus_name)
+	_check(manager.play_event("wood_chop", Vector3.ZERO), "Known world sounds should play through the 3D voice pool.")
+	_check(manager.play_ui("ui_click"), "Known UI sounds should play through the UI voice pool.")
+	_check(not manager.play_event("not_a_sound", Vector3.ZERO), "Unknown sound names should fail safely.")
+	_check(not manager.play_ui("not_a_sound"), "Unknown UI sound names should fail safely.")
+
+	var asset_report: Dictionary = manager.get_missing_asset_report()
+	var sound_names: Array = manager.get_sound_names()
+	_check(sound_names.size() >= 35, "The sound manifest should include the requested sound categories.")
+	_check(
+		asset_report.size() == sound_names.size() + 7,
+		"Every required one-shot and ambience loop should be classified in the asset report."
+	)
+	for asset_name in asset_report:
+		_check(String(asset_report[asset_name]).begins_with("generated_placeholder"), "Sounds without external assets should be identified as generated placeholders.")
+	for loop_name in manager.get("ambience_players"):
+		var ambience_player: AudioStreamPlayer = manager.get("ambience_players")[loop_name]
+		_check(ambience_player.stream is AudioStreamWAV, "Ambience loop %s should have a generated stream." % loop_name)
+
+	_check(manager.get("weather_name") == "STORM", "Weather changes should reach the AudioManager.")
+	game.call("_update_day_cycle")
+	var elapsed_game_time: float = game.get("elapsed_game_time")
+	var day_length_seconds: float = game.get("day_length_seconds")
+	var expected_day_phase := fposmod(elapsed_game_time / day_length_seconds, 1.0)
+	_check(
+		manager.get("day_phase") == expected_day_phase,
+		"Day/night phase should synchronize with the AudioManager."
+	)
+	_check(manager.get_play_attempt_count("wood_chop") > 0, "Successful wood gathering should trigger a chopping sound.")
+	_check(manager.get_play_attempt_count("stone_hit") > 0, "Successful stone gathering should trigger a stone sound.")
+	_check(manager.get_play_attempt_count("craft_axe") > 0, "Successful crafting should trigger a recipe sound.")
+	_check(manager.get_play_attempt_count("action_fail") > 0, "Failed gameplay actions should trigger a failure sound.")
+	_check(manager.get_play_attempt_count("lightning") > 0, "Storm lightning should trigger a positional audio event.")
+	var building_audio: Node = building_game.get("audio_manager")
+	_check(
+		building_audio.get_play_attempt_count("build_foundation") > 0,
+		"Successful foundation placement should trigger a positional construction sound."
+	)
+	var animals: Array = game.get("wildlife_system").get_animals()
+	var wildlife_sound_count: int = (
+		int(manager.get_play_attempt_count("deer_alert"))
+		+ int(manager.get_play_attempt_count("deer_flee"))
+		+ int(manager.get_play_attempt_count("boar_growl"))
+		+ int(manager.get_play_attempt_count("boar_defend"))
+		+ int(manager.get_play_attempt_count("deer_step"))
+		+ int(manager.get_play_attempt_count("boar_step"))
+	)
+	_check(not animals.is_empty() and wildlife_sound_count > 0, "Wildlife state or movement changes should trigger positional animal sounds.")
+
+	manager.play_event("tree_impact", Vector3.ZERO, 0)
+	var world_voices: Array = manager.get("world_voices")
+	var active_voice: AudioStreamPlayer3D
+	for voice in world_voices:
+		if voice.playing:
+			active_voice = voice
+			break
+	if manager.get("audio_output_available"):
+		_check(active_voice != null, "A world sound should be active before testing application pause.")
+	manager.pause_audio(true)
+	if manager.get("audio_output_available"):
+		_check(active_voice != null and active_voice.stream_paused, "Audio playback should pause with the application.")
+	else:
+		_check(manager.get("audio_paused"), "AudioManager should track the paused application state.")
+	manager.pause_audio(false)
+	if manager.get("audio_output_available"):
+		_check(active_voice != null and not active_voice.stream_paused, "Audio playback should resume with the application.")
+	else:
+		_check(not manager.get("audio_paused"), "AudioManager should track the resumed application state.")
+
+	var saved_volumes: Dictionary = {}
+	var saved_mutes: Dictionary = {}
+	for bus_name in ["Master", "Music", "Environment", "SFX"]:
+		saved_volumes[bus_name] = manager.get_bus_volume(bus_name)
+		saved_mutes[bus_name] = manager.is_bus_muted(bus_name)
+	manager.settings_path = AUDIO_SETTINGS_TEST_PATH
+	var test_settings_absolute_path := ProjectSettings.globalize_path(AUDIO_SETTINGS_TEST_PATH)
+	if FileAccess.file_exists(AUDIO_SETTINGS_TEST_PATH):
+		DirAccess.remove_absolute(test_settings_absolute_path)
+
+	game.call("_set_main_menu_open", true)
+	game.get("audio_settings_button").pressed.emit()
+	await process_frame
+	var settings_panel: Control = game.get("audio_settings_panel")
+	_check(settings_panel.visible, "Audio settings should open from the mobile main menu.")
+	for viewport_size in [Vector2i(360, 800), Vector2i(800, 450)]:
+		game.get_parent().size = viewport_size
+		await process_frame
+		var panel_rect := settings_panel.get_global_rect()
+		_check(panel_rect.position.x >= 0.0 and panel_rect.end.x <= viewport_size.x, "Audio settings should fit the viewport width.")
+		_check(panel_rect.position.y >= 0.0 and panel_rect.end.y <= viewport_size.y, "Audio settings should fit the viewport height.")
+		var settings_column: VBoxContainer = settings_panel.get_child(0)
+		for row_index in range(1, 5):
+			var settings_row: Control = settings_column.get_child(row_index)
+			var row_rect := settings_row.get_global_rect()
+			_check(row_rect.position.x >= panel_rect.position.x and row_rect.end.x <= panel_rect.end.x, "Audio setting controls should fit inside the panel.")
+	_check(game.get("audio_sliders").size() == 4 and game.get("audio_mute_buttons").size() == 4, "Master and all three audio buses should have volume and mute controls.")
+	var master_slider: HSlider = game.get("audio_sliders")["Master"]
+	master_slider.value = 0.63
+	_check(is_equal_approx(manager.get_bus_volume("Master"), 0.63), "The master volume slider should update its audio bus.")
+	var master_mute: CheckButton = game.get("audio_mute_buttons")["Master"]
+	master_mute.set_pressed_no_signal(true)
+	master_mute.toggled.emit(true)
+	_check(manager.is_bus_muted("Master"), "The master mute control should mute the audio bus.")
+	master_mute.set_pressed_no_signal(false)
+	master_mute.toggled.emit(false)
+	_check(not manager.is_bus_muted("Master"), "The master mute control should unmute the audio bus.")
+	var test_settings := ConfigFile.new()
+	_check(test_settings.load(AUDIO_SETTINGS_TEST_PATH) == OK, "Audio settings should persist locally in a ConfigFile.")
+	_check(
+		is_equal_approx(float(test_settings.get_value("audio", "Master_volume", -1.0)), 0.63),
+		"Persisted audio settings should contain the selected master volume."
+	)
+
+	for bus_name in ["Master", "Music", "Environment", "SFX"]:
+		manager.set_bus_volume(bus_name, float(saved_volumes[bus_name]))
+		manager.set_bus_muted(bus_name, bool(saved_mutes[bus_name]))
+	if FileAccess.file_exists(AUDIO_SETTINGS_TEST_PATH):
+		DirAccess.remove_absolute(test_settings_absolute_path)
+	game.get("audio_settings_back_button").pressed.emit()
+	game.call("_set_main_menu_open", false)
+	game.get_parent().size = Vector2i(360, 800)
+	print("PASS: audio initialization, gameplay event hooks, placeholders, settings, app pause/resume, and mobile layout")
+
+
 func _test_save_system(game: Node3D, mobile_game: Node3D) -> void:
 	var save_manager: RefCounted = game.get("save_manager")
 	mobile_game.get("save_manager").save_path = SAVE_TEST_PATH
@@ -517,7 +658,7 @@ func _test_save_system(game: Node3D, mobile_game: Node3D) -> void:
 	_check(menu_rect.position.y >= 0.0 and menu_rect.end.y <= 450.0, "Main Menu should fit within a landscape mobile viewport.")
 	var menu_panel: Control = mobile_game.get("main_menu").get_child(1)
 	var menu_column: VBoxContainer = menu_panel.get_child(0)
-	for button_index in range(3, menu_column.get_child_count()):
+	for button_index in range(4, menu_column.get_child_count()):
 		var menu_button: Button = menu_column.get_child(button_index)
 		_check(menu_button.get_global_rect().size.y >= 44.0, "Main Menu actions should have touch-friendly target heights.")
 		_check(

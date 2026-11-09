@@ -37,6 +37,10 @@ var body_visual: Node3D
 var tail_visual: Node3D
 var leg_pivots: Array[Node3D] = []
 var rng := RandomNumberGenerator.new()
+var audio_manager: Node
+var footstep_elapsed := 0.0
+var idle_call_elapsed := 0.0
+var idle_call_interval := 24.0
 
 
 func configure(
@@ -58,6 +62,9 @@ func configure(
 func _ready() -> void:
 	name = "Deer" if animal_type == "deer" else "WildBoar"
 	add_to_group("wildlife")
+	audio_manager = get_tree().get_first_node_in_group("audio_manager")
+	state_changed.connect(_on_state_changed)
+	idle_call_interval = rng.randf_range(24.0, 42.0)
 	collision_layer = 4
 	collision_mask = 5
 	if is_instance_valid(player):
@@ -90,6 +97,7 @@ func _physics_process(delta: float) -> void:
 		velocity.y = 0.0
 	move_and_slide()
 	_animate(delta, move_direction)
+	_update_animal_audio(delta)
 	_keep_inside_island()
 
 
@@ -195,6 +203,38 @@ func _set_state(next_state: AnimalState) -> void:
 		AnimalState.RETURN:
 			wander_target = home_position
 	state_changed.emit(self, get_state_name())
+
+
+func _on_state_changed(_animal: CharacterBody3D, state_name: String) -> void:
+	if not is_instance_valid(audio_manager):
+		return
+	match state_name:
+		"ALERT":
+			audio_manager.play_event("deer_alert" if animal_type == "deer" else "boar_growl", global_position, 350)
+		"FLEE":
+			audio_manager.play_event("deer_flee", global_position, 300)
+		"DEFEND":
+			audio_manager.play_event("boar_defend", global_position, 300)
+
+
+func _update_animal_audio(delta: float) -> void:
+	if not is_instance_valid(audio_manager):
+		return
+	var horizontal_speed := Vector2(velocity.x, velocity.z).length()
+	if is_on_floor() and horizontal_speed > 0.35:
+		footstep_elapsed += delta
+		var step_interval := 0.42 if state == AnimalState.FLEE or state == AnimalState.DEFEND else 0.68
+		if footstep_elapsed >= step_interval:
+			footstep_elapsed = 0.0
+			audio_manager.play_event("deer_step" if animal_type == "deer" else "boar_step", global_position, 180)
+	else:
+		footstep_elapsed = 0.0
+	if animal_type == "deer" and state == AnimalState.IDLE:
+		idle_call_elapsed += delta
+		if idle_call_elapsed >= idle_call_interval:
+			idle_call_elapsed = 0.0
+			idle_call_interval = rng.randf_range(24.0, 42.0)
+			audio_manager.play_event("deer_call", global_position, 1000)
 
 
 func _choose_wander_target() -> void:

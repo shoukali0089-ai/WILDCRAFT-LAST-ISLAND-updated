@@ -17,6 +17,8 @@ func configure(id: String, as_preview: bool = false) -> void:
 	preview_only = as_preview
 	collision_layer = 0 if as_preview else 1
 	collision_mask = 0 if as_preview else 1
+	if not as_preview:
+		add_to_group("wooden_structure")
 	for part in _parts_for(id):
 		var part_size: Vector3 = part["size"]
 		var part_position: Vector3 = part["position"]
