@@ -17,6 +17,7 @@ A mobile-first, single-player 3D survival prototype made with Godot 4 and GDScri
 6. Tap **CRAFT** or press **C** to open the crafting menu. Select a recipe, review its costs and current materials, and tap **CRAFT**. Close the menu to return to the island.
 7. Tap **BUILD** or press **B** to open Build Mode. Choose a foundation, wall, door, or roof; tap **ROTATE** or press **R** to rotate; use **PLACE** or **E** to place, and **CANCEL** or **Esc** to leave Build Mode. Mobile movement and look controls remain available while building.
 8. Tap **MAIN MENU** to save, continue, start a new game, or return to play. Starting a new game and deleting a save both require confirmation.
+9. Open **AUDIO & GRAPHICS** in the main menu to adjust sound, choose Low/Medium/High graphics, or toggle the FPS readout. Graphics choices are stored locally in `user://graphics_settings.cfg`.
 
 The HUD shows health, hunger, thirst, the day/night clock, gathered materials, and crafted items. Hunger and thirst decrease over time; health decreases if either reaches zero. The Stone Axe yields one extra wood when gathering palms. Campfires are held in inventory ready for placement; Wooden Spears are held ready for future combat. The first run is a playable island-and-gathering prototype, not the complete survival game.
 
@@ -42,6 +43,7 @@ Run the headless prototype, crafting, shelter, wildlife, weather, and save smoke
 - Procedural sunny, cloudy, rainy, and storm weather with gradual transitions, temperature, shelter protection, rain, wind sway, and lightning.
 - Versioned local JSON save/load with safe validation, autosave, and mobile-friendly menu controls.
 - Godot's Compatibility renderer and primitive-only assets for a modest mobile rendering baseline.
+- Low, Medium, and High graphics profiles adjust sun shadows, rain particle density, wildlife decision cadence, and frame-rate caps (30 FPS for Low; 60 FPS for Medium/High). Settings persist locally. The optional FPS monitor updates twice per second.
 
 ## Not implemented yet
 

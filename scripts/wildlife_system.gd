@@ -14,6 +14,7 @@ var obstacle_nodes: Array[Node3D] = []
 var island_radius := 48.0
 var animals: Array[CharacterBody3D] = []
 var rng := RandomNumberGenerator.new()
+var ai_update_interval := 0.25
 
 
 func configure(
@@ -35,6 +36,13 @@ func _ready() -> void:
 
 func get_animals() -> Array[CharacterBody3D]:
 	return animals.duplicate()
+
+
+func set_ai_update_interval(interval: float) -> void:
+	ai_update_interval = maxf(interval, 0.05)
+	for animal in animals:
+		if is_instance_valid(animal):
+			animal.ai_update_interval = ai_update_interval
 
 
 func get_animals_of_type(type: String) -> Array[CharacterBody3D]:
@@ -94,6 +102,7 @@ func restore_save_data(data: Array) -> bool:
 		var home := _array_to_vector(item["home_position"])
 		var animal: CharacterBody3D = ANIMAL_SCRIPT.new()
 		animal.configure(String(item["animal_type"]), player, home, obstacle_nodes, island_radius)
+		animal.ai_update_interval = ai_update_interval
 		animal.position = _array_to_vector(item["position"])
 		add_child(animal)
 		if not animal.restore_saved_state(String(item["state"])):
@@ -116,6 +125,7 @@ func _spawn_animals() -> void:
 			obstacle_nodes,
 			island_radius
 		)
+		animal.ai_update_interval = ai_update_interval
 		animal.position = spawn_position["position"]
 		add_child(animal)
 		animals.append(animal)

@@ -41,6 +41,7 @@ var wind_phase := 0.0
 var lightning_timer := 0.0
 var lightning_flash := 0.0
 var lightning_visible_time := 0.0
+var quality_scale := 1.0
 
 var world_environment: WorldEnvironment
 var sun: DirectionalLight3D
@@ -460,7 +461,7 @@ func _apply_visuals() -> void:
 		return
 	cloud_material.albedo_color.a = cloud_amount * 0.76
 	cloud_layer.visible = cloud_amount > 0.015
-	rain_particles.amount_ratio = rain_amount * (0.58 + wind_strength * 0.42)
+	rain_particles.amount_ratio = rain_amount * (0.58 + wind_strength * 0.42) * quality_scale
 	rain_particles.emitting = rain_amount > 0.015 and not is_player_sheltered
 	world_environment.environment.fog_enabled = true
 	world_environment.environment.fog_density = 0.0005 + rain_amount * 0.004

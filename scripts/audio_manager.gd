@@ -89,6 +89,8 @@ var weather_name := "SUNNY"
 var day_phase := 0.5
 var audio_output_available := true
 var audio_paused := false
+var _ambience_weather := ""
+var _ambience_night_state := -1
 var rng := RandomNumberGenerator.new()
 
 
@@ -212,7 +214,11 @@ func get_missing_asset_report() -> Dictionary:
 
 
 func set_weather(next_weather: String) -> void:
-	weather_name = next_weather.to_upper()
+	var normalized_weather := next_weather.to_upper()
+	if normalized_weather == _ambience_weather:
+		return
+	_ambience_weather = normalized_weather
+	weather_name = normalized_weather
 	var rain_target := -80.0
 	var wind_target := -80.0
 	match weather_name:
@@ -238,6 +244,10 @@ func set_weather(next_weather: String) -> void:
 func set_day_phase(value: float) -> void:
 	day_phase = fposmod(value, 1.0)
 	var night := day_phase < 0.22 or day_phase > 0.78
+	var next_night_state := 1 if night else 0
+	if next_night_state == _ambience_night_state:
+		return
+	_ambience_night_state = next_night_state
 	_fade_ambience("birds", -80.0 if night else -22.0)
 	_fade_ambience("insects", -24.0 if night else -80.0)
 

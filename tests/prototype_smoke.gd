@@ -6,6 +6,8 @@ const TOUCH_LOOK_SCRIPT := preload("res://scripts/touch_look.gd")
 const HARVESTABLE_SCRIPT := preload("res://scripts/harvestable.gd")
 const SAVE_TEST_PATH := "user://wildcraft_prototype_smoke_save.json"
 const AUDIO_SETTINGS_TEST_PATH := "user://wildcraft_audio_smoke_settings.cfg"
+const GRAPHICS_SETTINGS_SCRIPT := preload("res://scripts/graphics_settings.gd")
+const GRAPHICS_SETTINGS_TEST_PATH := "user://wildcraft_graphics_smoke_settings.cfg"
 
 var test_failed := false
 
@@ -234,6 +236,7 @@ func _run() -> void:
 	await _test_wildlife(game)
 	await _test_weather(game, building_game)
 	await _test_audio_system(game, building_game)
+	await _test_graphics_settings(game)
 	await _test_save_system(building_game, game)
 
 	root.remove_child(building_game)
@@ -650,6 +653,12 @@ func _test_audio_system(game: Node3D, building_game: Node3D) -> void:
 			var settings_row: Control = settings_column.get_child(row_index)
 			var row_rect := settings_row.get_global_rect()
 			_check(row_rect.position.x >= panel_rect.position.x and row_rect.end.x <= panel_rect.end.x, "Audio setting controls should fit inside the panel.")
+		for setting_control in settings_column.get_children():
+			var control_rect: Rect2 = setting_control.get_global_rect()
+			_check(
+				control_rect.position.y >= panel_rect.position.y and control_rect.end.y <= panel_rect.end.y,
+				"Every audio and graphics setting row should fit inside the panel."
+			)
 	_check(game.get("audio_sliders").size() == 4 and game.get("audio_mute_buttons").size() == 4, "Master and all three audio buses should have volume and mute controls.")
 	var master_slider: HSlider = game.get("audio_sliders")["Master"]
 	master_slider.value = 0.63
@@ -677,6 +686,83 @@ func _test_audio_system(game: Node3D, building_game: Node3D) -> void:
 	game.call("_set_main_menu_open", false)
 	game.get_parent().size = Vector2i(360, 800)
 	print("PASS: real audio assets, missing-asset handling, gameplay hooks, settings, pause/resume, and mobile layout")
+
+
+func _test_graphics_settings(game: Node3D) -> void:
+	var manager: Node = game.get("graphics_settings")
+	var weather: Node = game.get("weather_system")
+	manager.settings_path = GRAPHICS_SETTINGS_TEST_PATH
+	if FileAccess.file_exists(GRAPHICS_SETTINGS_TEST_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(GRAPHICS_SETTINGS_TEST_PATH))
+
+	for profile_name in GRAPHICS_SETTINGS_SCRIPT.PROFILES:
+		_check(manager.set_profile(String(profile_name)), "Each supported graphics profile should apply.")
+		_check(manager.get("profile") == profile_name, "The selected graphics profile should be tracked.")
+		var profile_settings: Dictionary = GRAPHICS_SETTINGS_SCRIPT.PROFILE_SETTINGS[profile_name]
+		var saved_rain_amount: float = weather.rain_amount
+		var saved_wind_strength: float = weather.wind_strength
+		weather.rain_amount = 1.0
+		weather.wind_strength = 1.0
+		weather.call("_apply_visuals")
+		_check(
+			is_equal_approx(weather.rain_particles.amount_ratio, float(profile_settings["rain_quality"])),
+			"Graphics profiles should scale the weather particle workload."
+		)
+		weather.rain_amount = saved_rain_amount
+		weather.wind_strength = saved_wind_strength
+		weather.call("_apply_visuals")
+		_check(
+			game.get("sun").shadow_enabled == (profile_name != "low"),
+			"Low graphics should disable sun shadows and other profiles should retain them."
+		)
+		_check(
+			is_equal_approx(float(game.get("wildlife_system").ai_update_interval), float(profile_settings["ai_interval"])),
+			"Graphics profiles should adjust wildlife decision update intervals."
+		)
+		_check(Engine.max_fps == int(profile_settings["fps_cap"]), "Graphics profiles should apply their frame-rate cap.")
+
+	game.call("_set_main_menu_open", true)
+	game.get("audio_settings_button").pressed.emit()
+	await process_frame
+	var settings_panel: Control = game.get("audio_settings_panel")
+	var profile_option: OptionButton = game.get("graphics_profile_option")
+	var fps_toggle: CheckButton = game.get("fps_monitor_toggle")
+	for viewport_size in [Vector2i(360, 800), Vector2i(800, 450)]:
+		game.get_parent().size = viewport_size
+		await process_frame
+		var panel_rect := settings_panel.get_global_rect()
+		for control in [profile_option, fps_toggle]:
+			var control_rect: Rect2 = control.get_global_rect()
+			_check(
+				control_rect.position.x >= panel_rect.position.x and control_rect.end.x <= panel_rect.end.x
+				and control_rect.position.y >= panel_rect.position.y and control_rect.end.y <= panel_rect.end.y,
+				"Graphics controls should remain inside the audio/graphics settings panel."
+			)
+	profile_option.item_selected.emit(GRAPHICS_SETTINGS_SCRIPT.PROFILES.find("high"))
+	_check(manager.get("profile") == "high", "The graphics selector should apply the selected quality profile.")
+	fps_toggle.set_pressed_no_signal(true)
+	fps_toggle.toggled.emit(true)
+	game.call("_process", 0.5)
+	_check(manager.get("fps_monitor_enabled"), "The FPS toggle should enable the monitor.")
+	_check(game.get("fps_monitor_label").visible, "Enabling FPS should show its HUD readout.")
+	_check(String(game.get("fps_monitor_label").text).begins_with("FPS: "), "The FPS readout should display the measured frame rate.")
+
+	var restored_settings: Node = GRAPHICS_SETTINGS_SCRIPT.new()
+	restored_settings.settings_path = GRAPHICS_SETTINGS_TEST_PATH
+	root.add_child(restored_settings)
+	await process_frame
+	_check(restored_settings.get("profile") == "high", "The graphics profile should persist across manager initialization.")
+	_check(restored_settings.get("fps_monitor_enabled"), "The FPS monitor preference should persist across manager initialization.")
+	restored_settings.queue_free()
+
+	profile_option.item_selected.emit(GRAPHICS_SETTINGS_SCRIPT.PROFILES.find("medium"))
+	fps_toggle.set_pressed_no_signal(false)
+	fps_toggle.toggled.emit(false)
+	game.call("_set_main_menu_open", false)
+	game.get_parent().size = Vector2i(360, 800)
+	if FileAccess.file_exists(GRAPHICS_SETTINGS_TEST_PATH):
+		DirAccess.remove_absolute(ProjectSettings.globalize_path(GRAPHICS_SETTINGS_TEST_PATH))
+	print("PASS: Low/Medium/High profiles, persisted settings, FPS toggle, and portrait/landscape settings layout")
 
 
 func _test_save_system(game: Node3D, mobile_game: Node3D) -> void:

@@ -9,7 +9,6 @@ const DEER_FLEE_DISTANCE := 22.0
 const BOAR_ALERT_DISTANCE := 10.0
 const BOAR_DEFEND_DISTANCE := 4.0
 const BOAR_DISENGAGE_DISTANCE := 13.0
-const AI_INTERVAL := 0.25
 
 const DEER_COAT := Color(0.49, 0.30, 0.16)
 const DEER_LIGHT := Color(0.77, 0.65, 0.44)
@@ -26,6 +25,7 @@ var player: CharacterBody3D
 var home_position := Vector3.ZERO
 var avoidance_nodes: Array[Node3D] = []
 var island_radius := 48.0
+var ai_update_interval := 0.25
 var ai_timer := 0.0
 var state_elapsed := 0.0
 var state_duration := 1.0
@@ -76,7 +76,7 @@ func _ready() -> void:
 
 func _physics_process(delta: float) -> void:
 	ai_timer += delta
-	if ai_timer >= AI_INTERVAL:
+	if ai_timer >= ai_update_interval:
 		var update_delta := ai_timer
 		ai_timer = 0.0
 		_update_ai(update_delta)

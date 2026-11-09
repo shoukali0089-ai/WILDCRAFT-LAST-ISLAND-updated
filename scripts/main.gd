@@ -11,6 +11,7 @@ const WILDLIFE_SYSTEM_SCRIPT := preload("res://scripts/wildlife_system.gd")
 const WEATHER_SYSTEM_SCRIPT := preload("res://scripts/weather_system.gd")
 const SAVE_MANAGER_SCRIPT := preload("res://scripts/save_manager.gd")
 const AUDIO_MANAGER_SCRIPT := preload("res://scripts/audio_manager.gd")
+const GRAPHICS_SETTINGS_SCRIPT := preload("res://scripts/graphics_settings.gd")
 
 const ISLAND_RADIUS := 48.0
 const TERRAIN_STEPS := 56
@@ -23,7 +24,9 @@ var wildlife_system: Node3D
 var weather_system: Node3D
 var save_manager: RefCounted
 var audio_manager: Node
+var graphics_settings: Node
 var weather_wind_parts: Array[Node3D] = []
+var harvestable_nodes: Array[Node3D] = []
 var inventory := {"wood": 0, "fiber": 0, "stone": 0, "berries": 0}
 var health := 100.0
 var hunger := 100.0
@@ -49,6 +52,9 @@ var audio_settings_button: Button
 var audio_settings_back_button: Button
 var audio_sliders: Dictionary = {}
 var audio_mute_buttons: Dictionary = {}
+var graphics_profile_option: OptionButton
+var fps_monitor_toggle: CheckButton
+var fps_monitor_label: Label
 var health_bar: ProgressBar
 var hunger_bar: ProgressBar
 var thirst_bar: ProgressBar
@@ -80,6 +86,20 @@ var autosave_interval := 120.0
 var resource_id_counter := 0
 var main_menu_open := false
 var last_load_error := ""
+var day_cycle_elapsed := 0.0
+var nearby_resource_elapsed := 0.0
+var hud_update_elapsed := 0.0
+var fps_update_elapsed := 0.0
+var shared_palm_trunk_mesh: CylinderMesh
+var shared_palm_frond_mesh: CylinderMesh
+var shared_rock_mesh: SphereMesh
+var shared_bush_mesh: SphereMesh
+var shared_berry_mesh: SphereMesh
+var shared_palm_trunk_material: StandardMaterial3D
+var shared_palm_frond_material: StandardMaterial3D
+var shared_rock_material: StandardMaterial3D
+var shared_bush_material: StandardMaterial3D
+var shared_berry_material: StandardMaterial3D
 
 
 func _notification(what: int) -> void:
@@ -96,6 +116,7 @@ func _notification(what: int) -> void:
 func _ready() -> void:
 	_build_environment()
 	_build_island()
+	_create_shared_scenery_assets()
 	_scatter_resources()
 	_spawn_player()
 	audio_manager = AUDIO_MANAGER_SCRIPT.new()
@@ -125,6 +146,10 @@ func _ready() -> void:
 		weather_wind_parts
 	)
 	add_child(weather_system)
+	graphics_settings = GRAPHICS_SETTINGS_SCRIPT.new()
+	graphics_settings.name = "GraphicsSettings"
+	graphics_settings.configure(sun, weather_system, wildlife_system)
+	add_child(graphics_settings)
 	weather_system.weather_changed.connect(audio_manager.set_weather)
 	weather_system.lightning_struck.connect(_on_lightning_struck)
 	save_manager = SAVE_MANAGER_SCRIPT.new()
@@ -132,6 +157,13 @@ func _ready() -> void:
 
 
 func _process(delta: float) -> void:
+	fps_update_elapsed += delta
+	if fps_update_elapsed >= 0.5:
+		fps_update_elapsed = 0.0
+		if is_instance_valid(fps_monitor_label) and is_instance_valid(graphics_settings):
+			fps_monitor_label.visible = graphics_settings.fps_monitor_enabled
+			if graphics_settings.fps_monitor_enabled:
+				fps_monitor_label.text = "FPS: %d" % Engine.get_frames_per_second()
 	if main_menu_open:
 		return
 	elapsed_game_time += delta
@@ -140,12 +172,21 @@ func _process(delta: float) -> void:
 	if autosave_elapsed >= autosave_interval:
 		autosave_elapsed = 0.0
 		_save_current_game(true)
-	_update_day_cycle()
+	day_cycle_elapsed += delta
+	if day_cycle_elapsed >= 0.1:
+		_update_day_cycle()
+		day_cycle_elapsed = 0.0
 	if survival_tick >= 1.0:
 		_update_survival(minf(survival_tick, 5.0))
 		survival_tick = 0.0
-	_update_nearby_resource()
-	_update_hud()
+	nearby_resource_elapsed += delta
+	if nearby_resource_elapsed >= 0.15:
+		_update_nearby_resource()
+		nearby_resource_elapsed = 0.0
+	hud_update_elapsed += delta
+	if hud_update_elapsed >= 0.2:
+		_update_hud()
+		hud_update_elapsed = 0.0
 	if build_mode_active and not selected_build_component.is_empty():
 		_update_build_preview()
 	if notification_time_left > 0.0:
@@ -302,6 +343,31 @@ func _scatter_resources() -> void:
 		_add_bush(point, rng.randf_range(0.75, 1.25))
 
 
+func _create_shared_scenery_assets() -> void:
+	shared_palm_trunk_mesh = CylinderMesh.new()
+	shared_palm_trunk_mesh.top_radius = 0.18
+	shared_palm_trunk_mesh.bottom_radius = 0.32
+	shared_palm_trunk_mesh.height = 5.2
+	shared_palm_frond_mesh = CylinderMesh.new()
+	shared_palm_frond_mesh.top_radius = 0.015
+	shared_palm_frond_mesh.bottom_radius = 0.11
+	shared_palm_frond_mesh.height = 3.2
+	shared_rock_mesh = SphereMesh.new()
+	shared_rock_mesh.radius = 0.8
+	shared_rock_mesh.height = 1.3
+	shared_bush_mesh = SphereMesh.new()
+	shared_bush_mesh.radius = 0.68
+	shared_bush_mesh.height = 1.1
+	shared_berry_mesh = SphereMesh.new()
+	shared_berry_mesh.radius = 0.11
+	shared_berry_mesh.height = 0.18
+	shared_palm_trunk_material = _material(Color(0.39, 0.25, 0.12))
+	shared_palm_frond_material = _material(Color(0.12, 0.38, 0.18))
+	shared_rock_material = _material(Color(0.43, 0.48, 0.47))
+	shared_bush_material = _material(Color(0.17, 0.42, 0.19))
+	shared_berry_material = _material(Color(0.7, 0.12, 0.2))
+
+
 func _random_island_point(rng: RandomNumberGenerator, min_radius: float, max_radius: float) -> Vector3:
 	var angle := rng.randf_range(0.0, TAU)
 	var radius := rng.randf_range(min_radius, max_radius)
@@ -316,27 +382,19 @@ func _add_palm(point: Vector3, scale_factor: float) -> void:
 	tree.scale = Vector3.ONE * scale_factor
 	add_child(tree)
 	var trunk := MeshInstance3D.new()
-	var trunk_mesh := CylinderMesh.new()
-	trunk_mesh.top_radius = 0.18
-	trunk_mesh.bottom_radius = 0.32
-	trunk_mesh.height = 5.2
-	trunk.mesh = trunk_mesh
+	trunk.mesh = shared_palm_trunk_mesh
 	trunk.position.y = 2.6
-	trunk.material_override = _material(Color(0.39, 0.25, 0.12))
+	trunk.material_override = shared_palm_trunk_material
 	tree.add_child(trunk)
 	var crown := Vector3(0.0, 5.1, 0.0)
 	for frond_index in range(5):
 		var angle := TAU * float(frond_index) / 5.0
 		var direction := Vector3(cos(angle), 0.48, sin(angle)).normalized()
 		var frond := MeshInstance3D.new()
-		var frond_mesh := CylinderMesh.new()
-		frond_mesh.top_radius = 0.015
-		frond_mesh.bottom_radius = 0.11
-		frond_mesh.height = 3.2
-		frond.mesh = frond_mesh
+		frond.mesh = shared_palm_frond_mesh
 		frond.position = crown + direction * 1.45
 		frond.quaternion = Quaternion(Vector3.UP, direction)
-		frond.material_override = _material(Color(0.12, 0.38, 0.18))
+		frond.material_override = shared_palm_frond_material
 		tree.add_child(frond)
 		weather_wind_parts.append(frond)
 
@@ -347,11 +405,8 @@ func _add_rock(point: Vector3, scale_factor: float) -> void:
 	rock.scale = Vector3(1.2, 0.8, 1.0) * scale_factor
 	add_child(rock)
 	var mesh_instance := MeshInstance3D.new()
-	var rock_mesh := SphereMesh.new()
-	rock_mesh.radius = 0.8
-	rock_mesh.height = 1.3
-	mesh_instance.mesh = rock_mesh
-	mesh_instance.material_override = _material(Color(0.43, 0.48, 0.47))
+	mesh_instance.mesh = shared_rock_mesh
+	mesh_instance.material_override = shared_rock_material
 	rock.add_child(mesh_instance)
 
 
@@ -361,19 +416,13 @@ func _add_bush(point: Vector3, scale_factor: float) -> void:
 	bush.scale = Vector3.ONE * scale_factor
 	add_child(bush)
 	var foliage := MeshInstance3D.new()
-	var foliage_mesh := SphereMesh.new()
-	foliage_mesh.radius = 0.68
-	foliage_mesh.height = 1.1
-	foliage.mesh = foliage_mesh
-	foliage.material_override = _material(Color(0.17, 0.42, 0.19))
+	foliage.mesh = shared_bush_mesh
+	foliage.material_override = shared_bush_material
 	bush.add_child(foliage)
 	var berries := MeshInstance3D.new()
-	var berry_mesh := SphereMesh.new()
-	berry_mesh.radius = 0.11
-	berry_mesh.height = 0.18
-	berries.mesh = berry_mesh
+	berries.mesh = shared_berry_mesh
 	berries.position = Vector3(0.38, 0.1, 0.36)
-	berries.material_override = _material(Color(0.7, 0.12, 0.2))
+	berries.material_override = shared_berry_material
 	bush.add_child(berries)
 
 
@@ -386,6 +435,7 @@ func _new_harvestable(title: String, yields: Dictionary, uses: int) -> Node3D:
 	resource.set("gathered_items", yields)
 	resource.set("gathers_left", uses)
 	resource.set("max_gathers", uses)
+	harvestable_nodes.append(resource)
 	return resource
 
 
@@ -448,6 +498,16 @@ func _build_hud() -> void:
 	weather_status_label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
 	weather_status_label.add_theme_font_size_override("font_size", 16)
 	weather_status_panel.add_child(weather_status_label)
+
+	fps_monitor_label = Label.new()
+	fps_monitor_label.name = "FPSMonitor"
+	fps_monitor_label.set_anchors_preset(Control.PRESET_BOTTOM_LEFT)
+	fps_monitor_label.position = Vector2(18.0, -224.0)
+	fps_monitor_label.size = Vector2(110.0, 24.0)
+	fps_monitor_label.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	fps_monitor_label.add_theme_font_size_override("font_size", 14)
+	fps_monitor_label.hide()
+	root.add_child(fps_monitor_label)
 
 	inventory_label = Label.new()
 	inventory_label.set_anchors_preset(Control.PRESET_TOP_RIGHT)
@@ -579,7 +639,7 @@ func _build_main_menu(parent: Control) -> void:
 	save_button.pressed.connect(_save_and_return)
 	var delete_button := _add_menu_button(column, "DELETE SAVE")
 	delete_button.pressed.connect(_request_save_deletion)
-	audio_settings_button = _add_menu_button(column, "AUDIO SETTINGS")
+	audio_settings_button = _add_menu_button(column, "AUDIO & GRAPHICS")
 	audio_settings_button.pressed.connect(_open_audio_settings)
 	var return_button := _add_menu_button(column, "RETURN TO GAME")
 	return_button.pressed.connect(func() -> void: _set_main_menu_open(false))
@@ -603,18 +663,23 @@ func _build_audio_settings(parent: Control) -> void:
 	audio_settings_panel.name = "AudioSettings"
 	audio_settings_panel.set_anchors_preset(Control.PRESET_FULL_RECT)
 	audio_settings_panel.set_anchor(SIDE_LEFT, 0.04)
-	audio_settings_panel.set_anchor(SIDE_TOP, 0.12)
+	audio_settings_panel.set_anchor(SIDE_TOP, 0.03)
 	audio_settings_panel.set_anchor(SIDE_RIGHT, 0.96)
-	audio_settings_panel.set_anchor(SIDE_BOTTOM, 0.88)
-	audio_settings_panel.add_theme_stylebox_override("panel", _make_menu_panel_style())
+	audio_settings_panel.set_anchor(SIDE_BOTTOM, 0.97)
+	var settings_style := _make_menu_panel_style()
+	settings_style.content_margin_left = 10.0
+	settings_style.content_margin_right = 10.0
+	settings_style.content_margin_top = 10.0
+	settings_style.content_margin_bottom = 10.0
+	audio_settings_panel.add_theme_stylebox_override("panel", settings_style)
 	audio_settings_panel.hide()
 	main_menu.add_child(audio_settings_panel)
 
 	var column := VBoxContainer.new()
-	column.add_theme_constant_override("separation", 6)
+	column.add_theme_constant_override("separation", 4)
 	audio_settings_panel.add_child(column)
 	var title := Label.new()
-	title.text = "AUDIO SETTINGS"
+	title.text = "AUDIO & GRAPHICS"
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	title.add_theme_font_size_override("font_size", 25)
 	column.add_child(title)
@@ -644,7 +709,28 @@ func _build_audio_settings(parent: Control) -> void:
 		mute.toggled.connect(_on_audio_mute_toggled.bind(bus_name))
 		row.add_child(mute)
 		audio_mute_buttons[bus_name] = mute
+	var graphics_row := HBoxContainer.new()
+	graphics_row.add_theme_constant_override("separation", 8)
+	column.add_child(graphics_row)
+	var graphics_label := Label.new()
+	graphics_label.text = "Graphics"
+	graphics_label.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	graphics_row.add_child(graphics_label)
+	graphics_profile_option = OptionButton.new()
+	graphics_profile_option.custom_minimum_size = Vector2(142.0, 44.0)
+	for profile_name in GRAPHICS_SETTINGS_SCRIPT.PROFILES:
+		graphics_profile_option.add_item(String(profile_name).capitalize())
+	graphics_profile_option.select(GRAPHICS_SETTINGS_SCRIPT.PROFILES.find(graphics_settings.profile))
+	graphics_profile_option.item_selected.connect(_on_graphics_profile_selected)
+	graphics_row.add_child(graphics_profile_option)
+	fps_monitor_toggle = CheckButton.new()
+	fps_monitor_toggle.text = "Show FPS"
+	fps_monitor_toggle.custom_minimum_size = Vector2(0.0, 48.0)
+	fps_monitor_toggle.button_pressed = graphics_settings.fps_monitor_enabled
+	fps_monitor_toggle.toggled.connect(_on_fps_monitor_toggled)
+	column.add_child(fps_monitor_toggle)
 	audio_settings_back_button = _add_menu_button(column, "BACK")
+	audio_settings_back_button.custom_minimum_size.y = 40.0
 	audio_settings_back_button.pressed.connect(_close_audio_settings)
 
 
@@ -666,6 +752,17 @@ func _on_audio_volume_changed(value: float, bus_name: String) -> void:
 
 func _on_audio_mute_toggled(muted: bool, bus_name: String) -> void:
 	audio_manager.set_bus_muted(bus_name, muted)
+
+
+func _on_graphics_profile_selected(index: int) -> void:
+	var profile_name: String = GRAPHICS_SETTINGS_SCRIPT.PROFILES[index]
+	if not graphics_settings.set_profile(profile_name):
+		push_warning("Could not apply graphics profile: %s" % profile_name)
+
+
+func _on_fps_monitor_toggled(enabled: bool) -> void:
+	graphics_settings.set_fps_monitor_enabled(enabled)
+	fps_monitor_label.visible = enabled
 
 
 func _make_menu_panel_style() -> StyleBoxFlat:
@@ -1152,15 +1249,15 @@ func _add_stat_bar(parent: VBoxContainer, title: String, tint: Color) -> Progres
 
 func _update_nearby_resource() -> void:
 	nearby_resource = null
-	var closest_distance := GATHER_DISTANCE
-	for candidate in get_children():
-		if candidate.get_script() != HARVESTABLE_SCRIPT:
+	var closest_distance_squared := GATHER_DISTANCE * GATHER_DISTANCE
+	for candidate in harvestable_nodes:
+		if not is_instance_valid(candidate):
 			continue
 		if int(candidate.get("gathers_left")) <= 0:
 			continue
-		var distance := player.global_position.distance_to(candidate.global_position)
-		if distance < closest_distance:
-			closest_distance = distance
+		var distance_squared := player.global_position.distance_squared_to(candidate.global_position)
+		if distance_squared < closest_distance_squared:
+			closest_distance_squared = distance_squared
 			nearby_resource = candidate
 	if is_instance_valid(nearby_resource):
 		var remaining: int = nearby_resource.get("gathers_left")
@@ -1201,6 +1298,7 @@ func _gather_nearby() -> void:
 				audio_manager.play_event("stone_break", resource.global_position, 220)
 		"Berry bush":
 			audio_manager.play_ui("pickup_berries")
+	_update_nearby_resource()
 	_update_hud()
 	_save_current_game(true)
 
@@ -1278,8 +1376,8 @@ func _save_current_game(automatic: bool) -> bool:
 
 func _build_save_data() -> Dictionary:
 	var resources: Array[Dictionary] = []
-	for child in get_children():
-		if child.get_script() != HARVESTABLE_SCRIPT:
+	for child in harvestable_nodes:
+		if not is_instance_valid(child):
 			continue
 		resources.append({
 			"id": String(child.get("resource_id")),
@@ -1364,8 +1462,8 @@ func _validate_resource_save_data(data: Variant) -> bool:
 	if typeof(data) != TYPE_ARRAY:
 		return false
 	var resources_by_id: Dictionary = {}
-	for child in get_children():
-		if child.get_script() == HARVESTABLE_SCRIPT:
+	for child in harvestable_nodes:
+		if is_instance_valid(child):
 			resources_by_id[String(child.get("resource_id"))] = child
 	if data.size() != resources_by_id.size():
 		return false
@@ -1394,8 +1492,8 @@ func _restore_resource_save_data(data: Array) -> bool:
 	if not _validate_resource_save_data(data):
 		return false
 	var resources_by_id: Dictionary = {}
-	for child in get_children():
-		if child.get_script() == HARVESTABLE_SCRIPT:
+	for child in harvestable_nodes:
+		if is_instance_valid(child):
 			resources_by_id[String(child.get("resource_id"))] = child
 	for item in data:
 		var resource: Node3D = resources_by_id[String(item["id"])]
