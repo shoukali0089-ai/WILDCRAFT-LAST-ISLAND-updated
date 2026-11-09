@@ -7,7 +7,7 @@ config_version=5
 
 config/name="WILDCRAFT: LAST ISLAND"
 run/main_scene="res://scenes/main.tscn"
-config/features=PackedStringArray("4.2", "GL Compatibility")
+config/features=PackedStringArray("4.4", "GL Compatibility")
 config/description="A mobile-first tropical survival prototype."
 
 [display]
@@ -43,6 +43,10 @@ interact={
 cancel={
 "deadzone": 0.2,
 "events": [Object(InputEventKey,"physical_keycode":4194305)]
+}
+craft_menu={
+"deadzone": 0.2,
+"events": [Object(InputEventKey,"physical_keycode":67)]
 }
 
 [rendering]
