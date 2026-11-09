@@ -430,7 +430,7 @@ func _build_crafting_menu(parent: Control) -> void:
 	header.add_child(title)
 	craft_menu_close_button = Button.new()
 	craft_menu_close_button.text = "CLOSE"
-	craft_menu_close_button.custom_minimum_size = Vector2(132.0, 58.0)
+	craft_menu_close_button.custom_minimum_size = Vector2(132.0, 72.0)
 	craft_menu_close_button.add_theme_font_size_override("font_size", 18)
 	craft_menu_close_button.pressed.connect(func() -> void: _set_crafting_menu_open(false))
 	header.add_child(craft_menu_close_button)
@@ -452,7 +452,6 @@ func _build_crafting_menu(parent: Control) -> void:
 
 func _add_recipe_card(parent: VBoxContainer, recipe_id: String, recipe: Dictionary) -> void:
 	var card := PanelContainer.new()
-	card.custom_minimum_size = Vector2(0.0, 112.0)
 	var card_style := StyleBoxFlat.new()
 	card_style.bg_color = Color(0.13, 0.22, 0.19, 0.98)
 	card_style.set_corner_radius_all(10)
@@ -463,17 +462,21 @@ func _add_recipe_card(parent: VBoxContainer, recipe_id: String, recipe: Dictiona
 	card.add_theme_stylebox_override("panel", card_style)
 	parent.add_child(card)
 
-	var row := HBoxContainer.new()
-	row.add_theme_constant_override("separation", 14)
-	card.add_child(row)
+	var card_column := VBoxContainer.new()
+	card_column.add_theme_constant_override("separation", 8)
+	card.add_child(card_column)
+
+	var details_row := HBoxContainer.new()
+	details_row.add_theme_constant_override("separation", 14)
+	card_column.add_child(details_row)
 	var icon = RECIPE_ICON_SCRIPT.new()
 	icon.icon_type = recipe["icon"]
-	row.add_child(icon)
+	details_row.add_child(icon)
 
 	var details := VBoxContainer.new()
 	details.size_flags_horizontal = Control.SIZE_EXPAND_FILL
 	details.size_flags_vertical = Control.SIZE_SHRINK_CENTER
-	row.add_child(details)
+	details_row.add_child(details)
 	var name_label := Label.new()
 	name_label.text = recipe["name"]
 	name_label.add_theme_font_size_override("font_size", 21)
@@ -484,16 +487,21 @@ func _add_recipe_card(parent: VBoxContainer, recipe_id: String, recipe: Dictiona
 	description_label.add_theme_font_size_override("font_size", 15)
 	details.add_child(description_label)
 	var requirement_label := Label.new()
+	requirement_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
 	requirement_label.add_theme_font_size_override("font_size", 16)
 	details.add_child(requirement_label)
+	var action_row := HBoxContainer.new()
+	action_row.add_theme_constant_override("separation", 8)
+	card_column.add_child(action_row)
 	recipe_requirement_labels[recipe_id] = requirement_label
 
 	var craft_button := Button.new()
 	craft_button.text = "CRAFT"
-	craft_button.custom_minimum_size = Vector2(132.0, 64.0)
+	craft_button.custom_minimum_size = Vector2(132.0, 72.0)
+	craft_button.size_flags_horizontal = Control.SIZE_SHRINK_END
 	craft_button.add_theme_font_size_override("font_size", 18)
 	craft_button.pressed.connect(_craft_recipe.bind(recipe_id))
-	row.add_child(craft_button)
+	action_row.add_child(craft_button)
 	recipe_craft_buttons[recipe_id] = craft_button
 
 
