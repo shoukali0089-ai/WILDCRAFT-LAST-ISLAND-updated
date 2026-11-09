@@ -31,6 +31,7 @@ func _run() -> void:
 
 	var player: CharacterBody3D = game.get("player")
 	_check(player != null, "The main scene should spawn the player.")
+	await _test_island_terrain(game)
 	var hud_root: Control = game.get_node("HUD").get_child(0)
 	var joystick: Control
 	var look_area: Control
@@ -1064,6 +1065,79 @@ func _collision_shape_count(body: StaticBody3D) -> int:
 		if child is CollisionShape3D:
 			count += 1
 	return count
+
+
+func _test_island_terrain(game: Node3D) -> void:
+	var player: CharacterBody3D = game.get("player")
+	var terrain_body: StaticBody3D = game.get("terrain_body")
+	var ocean: MeshInstance3D = game.get_node("Ocean")
+	var terrain_mesh_instance: MeshInstance3D = game.get_node("IslandTerrain")
+	_check(terrain_body != null, "The island should have a static terrain collision body.")
+	_check(
+		_collision_shape_count(terrain_body) > 0,
+		"Terrain collision should have a generated collision shape node."
+	)
+	_check(
+		terrain_body.collision_layer == 1 and (player.collision_mask & terrain_body.collision_layer) != 0,
+		"Player collision should include the explicit terrain collision layer."
+	)
+	_check(terrain_mesh_instance.mesh != null, "The island should have a generated visible terrain mesh.")
+
+	var ocean_level := ocean.global_position.y
+	var sample_radii: Array[float] = [0.0, 20.0, 40.0, player.island_boundary_radius - 0.5]
+	await physics_frame
+	for radius in sample_radii:
+		var sample_point: Vector3 = game.call("_terrain_point", 0.0, -radius)
+		var query := PhysicsRayQueryParameters3D.create(
+			Vector3(0.0, 20.0, -radius),
+			Vector3(0.0, -10.0, -radius),
+			1,
+			[player.get_rid()]
+		)
+		var hit := game.get_world_3d().direct_space_state.intersect_ray(query)
+		_check(hit.get("collider") == terrain_body, "Terrain collision should be continuous at radius %.1f." % radius)
+		if not hit.is_empty():
+			_check(absf(float(hit["position"].y) - sample_point.y) < 0.08, "Terrain collision height should match its visible mesh.")
+		_check(sample_point.y > ocean_level, "Walkable land at radius %.1f must be above the ocean." % radius)
+
+	var shoreline_point: Vector3 = game.call("_terrain_point", 0.0, -48.0)
+	var seabed_point: Vector3 = game.call("_terrain_point", 0.0, -51.0)
+	_check(shoreline_point.y > ocean_level, "The island's shoreline should meet land above the water plane.")
+	_check(seabed_point.y < ocean_level, "The terrain outside the shoreline should slope below the water plane.")
+
+	for frame_index in range(24):
+		await physics_frame
+	var spawn_ground: Vector3 = game.call("_terrain_point", 0.0, 0.0)
+	_check(player.is_on_floor(), "The spawned player should settle onto terrain collision.")
+	_check(
+		absf(player.global_position.y - spawn_ground.y) < 0.15,
+		"Player spawn should remain at the center terrain surface."
+	)
+
+	player.global_position = Vector3(
+		0.0,
+		game.call("_terrain_point", 0.0, -46.5).y + 0.1,
+		-46.5
+	)
+	player.rotation.y = 0.0
+	player.set_move_input(Vector2(0.0, -1.0))
+	for frame_index in range(30):
+		await physics_frame
+	var coast_radius := Vector2(player.global_position.x, player.global_position.z).length()
+	_check(
+		coast_radius <= player.island_boundary_radius + 0.02,
+		"Forward movement should stop at the playable coastline instead of continuing over ocean terrain."
+	)
+	_check(player.is_on_floor(), "The player should remain supported by terrain collision at the coastline.")
+	var outward_velocity := Vector2(player.velocity.x, player.velocity.z).dot(
+		Vector2(player.global_position.x, player.global_position.z).normalized()
+	)
+	_check(outward_velocity <= 0.02, "The coastline should remove outward movement velocity.")
+	player.set_move_input(Vector2.ZERO)
+	player.global_position = Vector3(0.0, spawn_ground.y + 0.15, 0.0)
+	for frame_index in range(4):
+		await physics_frame
+	print("PASS: terrain mesh/collision continuity, spawn grounding, shoreline waterline, and island movement boundary")
 
 
 func _array_to_vector(value: Array) -> Vector3:

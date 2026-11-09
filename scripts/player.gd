@@ -1,6 +1,7 @@
 extends CharacterBody3D
 
 @export var move_speed := 5.0
+@export var island_boundary_radius := 47.0
 @export var look_sensitivity := 0.003
 @export var look_pitch_min := -0.75
 @export var look_pitch_max := 0.45
@@ -38,11 +39,26 @@ func _physics_process(delta: float) -> void:
 	elif velocity.y < 0.0:
 		velocity.y = 0.0
 	move_and_slide()
+	_keep_inside_island()
 	_update_movement_audio(delta)
 
 
 func set_move_input(value: Vector2) -> void:
 	joystick_input = value
+
+
+func _keep_inside_island() -> void:
+	var horizontal_position := Vector2(global_position.x, global_position.z)
+	if horizontal_position.length_squared() <= island_boundary_radius * island_boundary_radius:
+		return
+	var boundary_position := horizontal_position.normalized() * island_boundary_radius
+	global_position.x = boundary_position.x
+	global_position.z = boundary_position.y
+	var outward_direction := boundary_position.normalized()
+	var outward_speed := Vector2(velocity.x, velocity.z).dot(outward_direction)
+	if outward_speed > 0.0:
+		velocity.x -= outward_direction.x * outward_speed
+		velocity.z -= outward_direction.y * outward_speed
 
 
 func add_look_input(delta: Vector2) -> void:

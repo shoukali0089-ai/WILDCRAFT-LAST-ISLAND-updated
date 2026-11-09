@@ -14,6 +14,7 @@ const AUDIO_MANAGER_SCRIPT := preload("res://scripts/audio_manager.gd")
 const GRAPHICS_SETTINGS_SCRIPT := preload("res://scripts/graphics_settings.gd")
 
 const ISLAND_RADIUS := 48.0
+const OCEAN_LEVEL := -0.35
 const TERRAIN_STEPS := 56
 const GATHER_DISTANCE := 4.0
 
@@ -262,6 +263,8 @@ func _build_island() -> void:
 
 	terrain_body = StaticBody3D.new()
 	terrain_body.name = "TerrainCollision"
+	terrain_body.collision_layer = 1
+	terrain_body.collision_mask = 1
 	var terrain_collision := CollisionShape3D.new()
 	var terrain_shape := terrain_mesh.create_trimesh_shape() as ConcavePolygonShape3D
 	terrain_shape.backface_collision = true
@@ -278,7 +281,7 @@ func _build_island() -> void:
 	ocean_material.albedo_color = Color(0.04, 0.38, 0.52)
 	ocean_material.roughness = 0.28
 	ocean.material_override = ocean_material
-	ocean.position.y = -0.35
+	ocean.position.y = OCEAN_LEVEL
 	add_child(ocean)
 
 
@@ -305,7 +308,7 @@ func _terrain_point(x: float, z: float) -> Vector3:
 	var distance := Vector2(x, z).length()
 	var shoreline := clampf((ISLAND_RADIUS - distance) / 12.0, 0.0, 1.0)
 	var hill := maxf(0.0, 1.0 - distance / 38.0)
-	var y := -1.35 + shoreline * 1.75 + hill * 4.6
+	var y := OCEAN_LEVEL + 0.2 + shoreline * 0.75 + hill * 4.4
 	if distance > ISLAND_RADIUS:
 		y -= minf((distance - ISLAND_RADIUS) * 0.28, 2.0)
 	return Vector3(x, y, z)
@@ -448,6 +451,7 @@ func _material(color: Color) -> StandardMaterial3D:
 
 func _spawn_player() -> void:
 	player = PLAYER_SCENE.instantiate()
+	player.island_boundary_radius = ISLAND_RADIUS - 1.0
 	player.position = Vector3(0.0, _terrain_point(0.0, 0.0).y + 0.15, 0.0)
 	add_child(player)
 
