@@ -6,12 +6,15 @@ const JOYSTICK_SCRIPT := preload("res://scripts/virtual_joystick.gd")
 const TOUCH_LOOK_SCRIPT := preload("res://scripts/touch_look.gd")
 const RECIPE_ICON_SCRIPT := preload("res://scripts/recipe_icon.gd")
 const CRAFTING_SYSTEM_SCRIPT := preload("res://scripts/crafting_system.gd")
+const BUILDING_SYSTEM_SCRIPT := preload("res://scripts/building_system.gd")
 
 const ISLAND_RADIUS := 48.0
 const TERRAIN_STEPS := 56
 const GATHER_DISTANCE := 4.0
 
 var player: CharacterBody3D
+var terrain_body: StaticBody3D
+var building_system: Node3D
 var inventory := {"wood": 0, "fiber": 0, "stone": 0, "berries": 0}
 var health := 100.0
 var hunger := 100.0
@@ -30,6 +33,12 @@ var thirst_bar: ProgressBar
 var interact_button: Button
 var craft_menu_button: Button
 var craft_menu_close_button: Button
+var build_mode_button: Button
+var build_menu: PanelContainer
+var build_menu_title: Label
+var build_status_label: Label
+var build_place_button: Button
+var build_cancel_button: Button
 var crafting_menu: Control
 var crafting_system: RefCounted
 var joystick_control: Control
@@ -38,6 +47,10 @@ var notification_label: Label
 var notification_time_left := 0.0
 var recipe_requirement_labels: Dictionary = {}
 var recipe_craft_buttons: Dictionary = {}
+var build_component_buttons: Dictionary = {}
+var build_mode_active := false
+var selected_build_component := ""
+var build_rotation_steps := 0
 var nearby_resource: Node3D
 var survival_tick := 0.0
 
@@ -48,6 +61,10 @@ func _ready() -> void:
 	_scatter_resources()
 	_spawn_player()
 	crafting_system = CRAFTING_SYSTEM_SCRIPT.new()
+	building_system = BUILDING_SYSTEM_SCRIPT.new()
+	building_system.name = "BuildingSystem"
+	add_child(building_system)
+	building_system.configure(terrain_body, player)
 	_build_hud()
 
 
@@ -60,6 +77,8 @@ func _process(delta: float) -> void:
 		survival_tick = 0.0
 	_update_nearby_resource()
 	_update_hud()
+	if build_mode_active and not selected_build_component.is_empty():
+		_update_build_preview()
 	if notification_time_left > 0.0:
 		notification_time_left -= delta
 		if notification_time_left <= 0.0:
@@ -73,12 +92,23 @@ func _input(event: InputEvent) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event.is_action_pressed("interact"):
-		_gather_nearby()
+		if build_mode_active:
+			_place_building()
+		else:
+			_gather_nearby()
 	elif event.is_action_pressed("craft_menu"):
 		_set_crafting_menu_open(not crafting_menu.visible)
 		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("build_mode"):
+		_set_build_mode_active(not build_mode_active)
+		get_viewport().set_input_as_handled()
+	elif event.is_action_pressed("rotate_build") and build_mode_active:
+		_rotate_building()
+		get_viewport().set_input_as_handled()
 	elif event.is_action_pressed("cancel"):
-		if crafting_menu.visible:
+		if build_mode_active:
+			_set_build_mode_active(false)
+		elif crafting_menu.visible:
 			_set_crafting_menu_open(false)
 		elif Input.mouse_mode == Input.MOUSE_MODE_CAPTURED:
 			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
@@ -120,10 +150,12 @@ func _build_island() -> void:
 	terrain.material_override = _terrain_material()
 	add_child(terrain)
 
-	var terrain_body := StaticBody3D.new()
+	terrain_body = StaticBody3D.new()
 	terrain_body.name = "TerrainCollision"
 	var terrain_collision := CollisionShape3D.new()
-	terrain_collision.shape = terrain_mesh.create_trimesh_shape()
+	var terrain_shape := terrain_mesh.create_trimesh_shape() as ConcavePolygonShape3D
+	terrain_shape.backface_collision = true
+	terrain_collision.shape = terrain_shape
 	terrain_body.add_child(terrain_collision)
 	add_child(terrain_body)
 
@@ -371,7 +403,17 @@ func _build_hud() -> void:
 	craft_menu_button.pressed.connect(_open_crafting_menu)
 	root.add_child(craft_menu_button)
 
+	build_mode_button = Button.new()
+	build_mode_button.text = "BUILD"
+	build_mode_button.set_anchors_preset(Control.PRESET_BOTTOM_RIGHT)
+	build_mode_button.position = Vector2(-156.0, -264.0)
+	build_mode_button.size = Vector2(132.0, 64.0)
+	build_mode_button.add_theme_font_size_override("font_size", 18)
+	build_mode_button.pressed.connect(func() -> void: _set_build_mode_active(not build_mode_active))
+	root.add_child(build_mode_button)
+
 	_build_crafting_menu(root)
+	_build_building_menu(root)
 	notification_label = Label.new()
 	notification_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
 	notification_label.position = Vector2(-240.0, 26.0)
@@ -448,6 +490,153 @@ func _build_crafting_menu(parent: Control) -> void:
 		var recipe: Dictionary = recipes[recipe_id]
 		_add_recipe_card(recipe_list, recipe_id, recipe)
 	_update_crafting_menu()
+
+
+func _build_building_menu(parent: Control) -> void:
+	build_menu = PanelContainer.new()
+	build_menu.name = "BuildingMenu"
+	build_menu.anchor_left = 0.5
+	build_menu.anchor_right = 0.5
+	build_menu.position = Vector2(-170.0, 164.0)
+	build_menu.size = Vector2(340.0, 348.0)
+	build_menu.mouse_filter = Control.MOUSE_FILTER_STOP
+	build_menu.hide()
+	var panel_style := StyleBoxFlat.new()
+	panel_style.bg_color = Color(0.08, 0.14, 0.13, 0.97)
+	panel_style.border_color = Color(0.45, 0.64, 0.49)
+	panel_style.set_border_width_all(2)
+	panel_style.set_corner_radius_all(12)
+	panel_style.content_margin_left = 10.0
+	panel_style.content_margin_right = 10.0
+	panel_style.content_margin_top = 10.0
+	panel_style.content_margin_bottom = 10.0
+	build_menu.add_theme_stylebox_override("panel", panel_style)
+	parent.add_child(build_menu)
+
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 8)
+	build_menu.add_child(column)
+	build_menu_title = Label.new()
+	build_menu_title.text = "BUILD MODE  •  %d WOOD" % int(inventory.get("wood", 0))
+	build_menu_title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	build_menu_title.add_theme_font_size_override("font_size", 19)
+	column.add_child(build_menu_title)
+
+	var component_grid := GridContainer.new()
+	component_grid.columns = 2
+	component_grid.add_theme_constant_override("h_separation", 8)
+	component_grid.add_theme_constant_override("v_separation", 8)
+	column.add_child(component_grid)
+	var definitions: Dictionary = building_system.get_component_definitions()
+	for component_id in definitions:
+		var selector := Button.new()
+		selector.text = "%s\n%d Wood" % [definitions[component_id]["name"], int(definitions[component_id]["cost"])]
+		selector.custom_minimum_size = Vector2(148.0, 62.0)
+		selector.add_theme_font_size_override("font_size", 16)
+		selector.pressed.connect(_select_build_component.bind(component_id))
+		component_grid.add_child(selector)
+		build_component_buttons[component_id] = selector
+
+	build_status_label = Label.new()
+	build_status_label.text = "Choose a structure to preview."
+	build_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	build_status_label.custom_minimum_size.y = 40.0
+	build_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	build_status_label.add_theme_font_size_override("font_size", 15)
+	column.add_child(build_status_label)
+
+	var actions := HBoxContainer.new()
+	actions.add_theme_constant_override("separation", 6)
+	column.add_child(actions)
+	var rotate_button := Button.new()
+	rotate_button.text = "ROTATE"
+	rotate_button.custom_minimum_size = Vector2(92.0, 68.0)
+	rotate_button.add_theme_font_size_override("font_size", 14)
+	rotate_button.pressed.connect(_rotate_building)
+	actions.add_child(rotate_button)
+	build_place_button = Button.new()
+	build_place_button.text = "PLACE"
+	build_place_button.custom_minimum_size = Vector2(104.0, 68.0)
+	build_place_button.add_theme_font_size_override("font_size", 16)
+	build_place_button.pressed.connect(_place_building)
+	actions.add_child(build_place_button)
+	build_cancel_button = Button.new()
+	build_cancel_button.text = "CANCEL"
+	build_cancel_button.custom_minimum_size = Vector2(104.0, 68.0)
+	build_cancel_button.add_theme_font_size_override("font_size", 14)
+	build_cancel_button.pressed.connect(func() -> void: _set_build_mode_active(false))
+	actions.add_child(build_cancel_button)
+
+
+func _select_build_component(component_id: String) -> void:
+	selected_build_component = component_id
+	build_rotation_steps = 0
+	for id in build_component_buttons:
+		build_component_buttons[id].toggle_mode = true
+		build_component_buttons[id].button_pressed = false
+	build_component_buttons[component_id].button_pressed = true
+	_update_build_preview()
+
+
+func _update_build_preview() -> void:
+	if not is_instance_valid(building_system) or selected_build_component.is_empty():
+		return
+	var target := player.global_position - player.global_basis.z * 3.0
+	var preview: Dictionary = building_system.update_preview(
+		selected_build_component,
+		target,
+		build_rotation_steps
+	)
+	build_place_button.disabled = not bool(preview["valid"])
+	var text := "READY TO PLACE" if preview["valid"] else String(preview["reason"])
+	build_status_label.text = "%s  •  %d Wood" % [text, int(inventory.get("wood", 0))]
+	build_status_label.add_theme_color_override(
+		"font_color",
+		Color(0.55, 0.95, 0.60) if preview["valid"] else Color(1.0, 0.55, 0.46)
+	)
+
+
+func _rotate_building() -> void:
+	if not build_mode_active or selected_build_component.is_empty():
+		return
+	build_rotation_steps = posmod(build_rotation_steps + 1, 4)
+	_update_build_preview()
+
+
+func _place_building() -> void:
+	if not build_mode_active or selected_build_component.is_empty():
+		return
+	var target := player.global_position - player.global_basis.z * 3.0
+	var result: Dictionary = building_system.place(
+		selected_build_component,
+		target,
+		build_rotation_steps,
+		inventory
+	)
+	_show_notification(result["message"], bool(result["success"]))
+	_update_hud()
+	_update_build_preview()
+
+
+func _set_build_mode_active(active: bool) -> void:
+	if active and crafting_menu.visible:
+		_set_crafting_menu_open(false)
+	build_mode_active = active
+	build_menu.visible = active
+	build_mode_button.text = "EXIT BUILD" if active else "BUILD"
+	interact_button.visible = not active
+	craft_menu_button.visible = not active
+	if active:
+		if selected_build_component.is_empty():
+			build_status_label.text = "Choose a structure to preview."
+		if not OS.has_feature("mobile"):
+			Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
+	elif is_instance_valid(building_system):
+		building_system.hide_preview()
+		selected_build_component = ""
+		build_place_button.disabled = true
+		if not OS.has_feature("mobile"):
+			Input.mouse_mode = Input.MOUSE_MODE_CAPTURED
 
 
 func _add_recipe_card(parent: VBoxContainer, recipe_id: String, recipe: Dictionary) -> void:
@@ -527,11 +716,14 @@ func _open_crafting_menu() -> void:
 
 
 func _set_crafting_menu_open(open: bool) -> void:
+	if open and build_mode_active:
+		_set_build_mode_active(false)
 	crafting_menu.visible = open
 	joystick_control.visible = not open
 	look_control.visible = not open
 	interact_button.visible = not open
 	craft_menu_button.visible = not open
+	build_mode_button.visible = not open
 	player.set_physics_process(not open)
 	if open:
 		player.velocity = Vector3.ZERO
@@ -640,6 +832,8 @@ func _update_hud() -> void:
 	health_bar.value = health
 	hunger_bar.value = hunger
 	thirst_bar.value = thirst
+	if is_instance_valid(build_menu_title):
+		build_menu_title.text = "BUILD MODE  •  %d WOOD" % int(inventory.get("wood", 0))
 	inventory_label.text = "PACK\nWood   %d\nFiber   %d\nStone  %d\nBerries %d\n\nCRAFTED\nStone Axe %d\nCampfire %d\nSpear %d" % [
 		inventory.get("wood", 0),
 		inventory.get("fiber", 0),

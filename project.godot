@@ -48,6 +48,14 @@ craft_menu={
 "deadzone": 0.2,
 "events": [Object(InputEventKey,"physical_keycode":67)]
 }
+build_mode={
+"deadzone": 0.2,
+"events": [Object(InputEventKey,"physical_keycode":66)]
+}
+rotate_build={
+"deadzone": 0.2,
+"events": [Object(InputEventKey,"physical_keycode":82)]
+}
 
 [rendering]
 

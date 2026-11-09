@@ -15,10 +15,13 @@ A mobile-first, single-player 3D survival prototype made with Godot 4 and GDScri
 4. Press **Esc** to release or recapture the mouse.
 5. On touch devices, use the lower-left joystick to move, drag on the right half of the screen to look, and tap **GATHER** near a resource.
 6. Tap **CRAFT** or press **C** to open the crafting menu. Select a recipe, review its costs and current materials, and tap **CRAFT**. Close the menu to return to the island.
+7. Tap **BUILD** or press **B** to open Build Mode. Choose a foundation, wall, door, or roof; tap **ROTATE** or press **R** to rotate; use **PLACE** or **E** to place, and **CANCEL** or **Esc** to leave Build Mode. Mobile movement and look controls remain available while building.
 
 The HUD shows health, hunger, thirst, the day/night clock, gathered materials, and crafted items. Hunger and thirst decrease over time; health decreases if either reaches zero. The Stone Axe yields one extra wood when gathering palms. Campfires are held in inventory ready for placement; Wooden Spears are held ready for future combat. The first run is a playable island-and-gathering prototype, not the complete survival game.
 
-Run the headless prototype and crafting smoke tests with `godot --headless --path . --script res://tests/prototype_smoke.gd`. It checks scene startup, mobile controls, movement, gathering, all recipes, material deductions, repeated and insufficient crafting, HUD updates, survival decay, and the clock.
+Shelter pieces cost 6 Wood for a foundation, 4 Wood for a wall, 3 Wood for a door, and 5 Wood for a roof. Foundations require suitable ground; walls snap to foundation edges; doors require an adjacent wall; and roofs require at least two walls. Structures have collision and remain in the world for the current session.
+
+Run the headless prototype, crafting, and shelter smoke tests with `godot --headless --path . --script res://tests/prototype_smoke.gd`. It checks scene startup, mobile controls and layouts, movement, gathering, all recipes, material deductions, repeated and insufficient crafting, shelter placement costs and rules, collision, doorway passage, HUD updates, survival decay, and the clock.
 
 ## Prototype contents
 
@@ -26,9 +29,10 @@ Run the headless prototype and crafting smoke tests with `godot --headless --pat
 - Third-person character movement with desktop mouse/keyboard and on-screen touch controls.
 - Resource gathering and a small inventory display.
 - Mobile-friendly crafting menu with Stone Axe, Campfire, and Wooden Spear recipes.
+- Mobile-friendly shelter building with procedural foundations, walls, doors, roofs, placement previews, snapping, rotation, and wood costs.
 - Health, hunger, and thirst meters plus a continuous day/night lighting cycle.
 - Godot's Compatibility renderer and primitive-only assets for a modest mobile rendering baseline.
 
 ## Not implemented yet
 
-Shelter construction, wildlife, weather effects, consumable use, local save/load, campfire placement, spear combat, and mobile export configuration are planned follow-up work. They are intentionally not presented as working features in this prototype.
+Wildlife, weather effects, consumable use, local save/load, campfire placement, spear combat, and mobile export configuration are planned follow-up work. They are intentionally not presented as working features in this prototype.
