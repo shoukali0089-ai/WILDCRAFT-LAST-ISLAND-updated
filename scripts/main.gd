@@ -9,6 +9,7 @@ const CRAFTING_SYSTEM_SCRIPT := preload("res://scripts/crafting_system.gd")
 const BUILDING_SYSTEM_SCRIPT := preload("res://scripts/building_system.gd")
 const WILDLIFE_SYSTEM_SCRIPT := preload("res://scripts/wildlife_system.gd")
 const WEATHER_SYSTEM_SCRIPT := preload("res://scripts/weather_system.gd")
+const SAVE_MANAGER_SCRIPT := preload("res://scripts/save_manager.gd")
 
 const ISLAND_RADIUS := 48.0
 const TERRAIN_STEPS := 56
@@ -19,6 +20,7 @@ var terrain_body: StaticBody3D
 var building_system: Node3D
 var wildlife_system: Node3D
 var weather_system: Node3D
+var save_manager: RefCounted
 var weather_wind_parts: Array[Node3D] = []
 var inventory := {"wood": 0, "fiber": 0, "stone": 0, "berries": 0}
 var health := 100.0
@@ -34,6 +36,12 @@ var inventory_label: Label
 var time_label: Label
 var weather_status_panel: PanelContainer
 var weather_status_label: Label
+var main_menu_button: Button
+var main_menu: Control
+var main_menu_status_label: Label
+var continue_game_button: Button
+var delete_confirmation_dialog: ConfirmationDialog
+var new_game_confirmation_dialog: ConfirmationDialog
 var health_bar: ProgressBar
 var hunger_bar: ProgressBar
 var thirst_bar: ProgressBar
@@ -60,6 +68,11 @@ var selected_build_component := ""
 var build_rotation_steps := 0
 var nearby_resource: Node3D
 var survival_tick := 0.0
+var autosave_elapsed := 0.0
+var autosave_interval := 120.0
+var resource_id_counter := 0
+var main_menu_open := false
+var last_load_error := ""
 
 
 func _ready() -> void:
@@ -90,12 +103,19 @@ func _ready() -> void:
 		weather_wind_parts
 	)
 	add_child(weather_system)
+	save_manager = SAVE_MANAGER_SCRIPT.new()
 	_build_hud()
 
 
 func _process(delta: float) -> void:
+	if main_menu_open:
+		return
 	elapsed_game_time += delta
 	survival_tick += delta
+	autosave_elapsed += delta
+	if autosave_elapsed >= autosave_interval:
+		autosave_elapsed = 0.0
+		_save_current_game(true)
 	_update_day_cycle()
 	if survival_tick >= 1.0:
 		_update_survival(minf(survival_tick, 5.0))
@@ -337,8 +357,11 @@ func _new_harvestable(title: String, yields: Dictionary, uses: int) -> Node3D:
 	var resource := Node3D.new()
 	resource.set_script(HARVESTABLE_SCRIPT)
 	resource.set("display_name", title)
+	resource.set("resource_id", "resource_%03d" % resource_id_counter)
+	resource_id_counter += 1
 	resource.set("gathered_items", yields)
 	resource.set("gathers_left", uses)
+	resource.set("max_gathers", uses)
 	return resource
 
 
@@ -471,6 +494,181 @@ func _build_hud() -> void:
 	notification_label.add_theme_font_size_override("font_size", 22)
 	notification_label.hide()
 	root.add_child(notification_label)
+	_build_main_menu(root)
+
+
+func _build_main_menu(parent: Control) -> void:
+	main_menu_button = Button.new()
+	main_menu_button.text = "MAIN MENU"
+	main_menu_button.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	main_menu_button.position = Vector2(-168.0, 164.0)
+	main_menu_button.size = Vector2(150.0, 56.0)
+	main_menu_button.add_theme_font_size_override("font_size", 17)
+	main_menu_button.pressed.connect(func() -> void: _set_main_menu_open(true))
+	parent.add_child(main_menu_button)
+
+	main_menu = Control.new()
+	main_menu.name = "MainMenu"
+	main_menu.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	main_menu.mouse_filter = Control.MOUSE_FILTER_STOP
+	main_menu.hide()
+	parent.add_child(main_menu)
+
+	var backdrop := ColorRect.new()
+	backdrop.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	backdrop.color = Color(0.015, 0.045, 0.045, 0.92)
+	backdrop.mouse_filter = Control.MOUSE_FILTER_STOP
+	main_menu.add_child(backdrop)
+
+	var panel := PanelContainer.new()
+	panel.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	panel.set_anchor(SIDE_LEFT, 0.06)
+	panel.set_anchor(SIDE_TOP, 0.05)
+	panel.set_anchor(SIDE_RIGHT, 0.94)
+	panel.set_anchor(SIDE_BOTTOM, 0.95)
+	panel.add_theme_stylebox_override("panel", _make_menu_panel_style())
+	main_menu.add_child(panel)
+	var column := VBoxContainer.new()
+	column.add_theme_constant_override("separation", 6)
+	panel.add_child(column)
+	var title := Label.new()
+	title.text = "WILDCRAFT: LAST ISLAND"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 25)
+	column.add_child(title)
+	var subtitle := Label.new()
+	subtitle.text = "LOCAL SURVIVAL SAVE"
+	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	subtitle.add_theme_font_size_override("font_size", 15)
+	column.add_child(subtitle)
+	main_menu_status_label = Label.new()
+	main_menu_status_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	main_menu_status_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	main_menu_status_label.custom_minimum_size.y = 24.0
+	column.add_child(main_menu_status_label)
+
+	var new_game_button := _add_menu_button(column, "NEW GAME")
+	new_game_button.pressed.connect(func() -> void: new_game_confirmation_dialog.popup_centered())
+	continue_game_button = _add_menu_button(column, "CONTINUE GAME")
+	continue_game_button.pressed.connect(_continue_game)
+	var save_button := _add_menu_button(column, "SAVE GAME")
+	save_button.pressed.connect(_save_and_return)
+	var delete_button := _add_menu_button(column, "DELETE SAVE")
+	delete_button.pressed.connect(_request_save_deletion)
+	var return_button := _add_menu_button(column, "RETURN TO GAME")
+	return_button.pressed.connect(func() -> void: _set_main_menu_open(false))
+
+	delete_confirmation_dialog = ConfirmationDialog.new()
+	delete_confirmation_dialog.title = "Delete local save?"
+	delete_confirmation_dialog.dialog_text = "This permanently deletes the local save. Continue?"
+	delete_confirmation_dialog.confirmed.connect(_delete_save_confirmed)
+	parent.add_child(delete_confirmation_dialog)
+
+	new_game_confirmation_dialog = ConfirmationDialog.new()
+	new_game_confirmation_dialog.title = "Start a new game?"
+	new_game_confirmation_dialog.dialog_text = "Starting over deletes the existing local save. Continue?"
+	new_game_confirmation_dialog.confirmed.connect(_start_new_game)
+	parent.add_child(new_game_confirmation_dialog)
+
+
+func _make_menu_panel_style() -> StyleBoxFlat:
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.08, 0.14, 0.13, 0.99)
+	style.border_color = Color(0.45, 0.64, 0.49)
+	style.set_border_width_all(2)
+	style.set_corner_radius_all(14)
+	style.content_margin_left = 18.0
+	style.content_margin_right = 18.0
+	style.content_margin_top = 18.0
+	style.content_margin_bottom = 18.0
+	return style
+
+
+func _add_menu_button(parent: VBoxContainer, title: String) -> Button:
+	var button := Button.new()
+	button.text = title
+	button.custom_minimum_size = Vector2(0.0, 46.0)
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.add_theme_font_size_override("font_size", 18)
+	parent.add_child(button)
+	return button
+
+
+func _set_main_menu_open(open: bool) -> void:
+	if open and crafting_menu.visible:
+		_set_crafting_menu_open(false)
+	if open and build_mode_active:
+		_set_build_mode_active(false)
+	main_menu_open = open
+	main_menu.visible = open
+	main_menu_button.visible = not open
+	if is_instance_valid(continue_game_button):
+		continue_game_button.disabled = not save_manager.has_valid_save()
+	if is_instance_valid(player):
+		player.set_physics_process(not open)
+		if open:
+			player.velocity = Vector3.ZERO
+			player.set_move_input(Vector2.ZERO)
+	if is_instance_valid(weather_system):
+		weather_system.set_process(not open)
+	if is_instance_valid(wildlife_system):
+		for animal in wildlife_system.get_animals():
+			animal.set_physics_process(not open)
+	if not OS.has_feature("mobile"):
+		Input.mouse_mode = Input.MOUSE_MODE_VISIBLE if open else Input.MOUSE_MODE_CAPTURED
+
+
+func _continue_game() -> void:
+	var load_result: Dictionary = save_manager.load_game()
+	if not load_result["success"]:
+		push_warning(String(load_result["error"]))
+		_show_notification(String(load_result["error"]), false)
+		main_menu_status_label.text = String(load_result["error"])
+		_set_main_menu_open(true)
+		return
+	if not _restore_save_data(load_result["data"]):
+		var error_message := last_load_error if not last_load_error.is_empty() else "Save data could not be safely restored."
+		_show_notification(error_message, false)
+		main_menu_status_label.text = error_message
+		return
+	_set_main_menu_open(false)
+	main_menu_status_label.text = ""
+	_show_notification("Game loaded.", true)
+
+
+func _save_and_return() -> void:
+	if _save_current_game(false):
+		_set_main_menu_open(false)
+
+
+func _start_new_game() -> void:
+	var delete_result: Dictionary = save_manager.delete_save(true)
+	if not delete_result["success"]:
+		push_warning(String(delete_result["error"]))
+		_show_notification(String(delete_result["error"]), false)
+		main_menu_status_label.text = String(delete_result["error"])
+		return
+	main_menu_status_label.text = ""
+	get_tree().reload_current_scene()
+
+
+func _request_save_deletion() -> void:
+	if not save_manager.has_save_file():
+		_show_notification("There is no save file to delete.", false)
+		return
+	delete_confirmation_dialog.popup_centered()
+
+
+func _delete_save_confirmed() -> void:
+	var result: Dictionary = save_manager.delete_save(true)
+	if not result["success"]:
+		push_warning(String(result["error"]))
+		_show_notification(String(result["error"]), false)
+		main_menu_status_label.text = String(result["error"])
+	else:
+		_show_notification("Local save deleted.", true)
+		main_menu_status_label.text = "Local save deleted."
+	_set_main_menu_open(true)
 
 
 func _build_crafting_menu(parent: Control) -> void:
@@ -665,6 +863,8 @@ func _place_building() -> void:
 	_show_notification(result["message"], bool(result["success"]))
 	_update_hud()
 	_update_build_preview()
+	if bool(result["success"]):
+		_save_current_game(true)
 
 
 func _set_build_mode_active(active: bool) -> void:
@@ -791,6 +991,8 @@ func _craft_recipe(recipe_id: String) -> bool:
 	_show_notification(result["message"], bool(result["success"]))
 	_update_crafting_menu()
 	_update_hud()
+	if bool(result["success"]):
+		_save_current_game(true)
 	return bool(result["success"])
 
 
@@ -833,6 +1035,8 @@ func _update_nearby_resource() -> void:
 	for candidate in get_children():
 		if candidate.get_script() != HARVESTABLE_SCRIPT:
 			continue
+		if int(candidate.get("gathers_left")) <= 0:
+			continue
 		var distance := player.global_position.distance_to(candidate.global_position)
 		if distance < closest_distance:
 			closest_distance = distance
@@ -858,6 +1062,7 @@ func _gather_nearby() -> void:
 		var item_key := String(item)
 		inventory[item_key] = int(inventory.get(item_key, 0)) + int(result[item])
 	_update_hud()
+	_save_current_game(true)
 
 
 func _update_survival(delta: float) -> void:
@@ -902,3 +1107,161 @@ func _update_hud() -> void:
 		inventory.get("campfire", 0),
 		inventory.get("wooden_spear", 0)
 	]
+
+
+func _save_current_game(automatic: bool) -> bool:
+	var result: Dictionary = save_manager.save_game(_build_save_data())
+	if not result["success"]:
+		push_warning(String(result["error"]))
+		if not automatic:
+			main_menu_status_label.text = String(result["error"])
+		if not automatic:
+			_show_notification("Save failed: %s" % result["error"], false)
+		return false
+	autosave_elapsed = 0.0
+	if not automatic:
+		main_menu_status_label.text = "Game saved locally."
+		_show_notification("Game saved locally.", true)
+	_update_continue_button()
+	return true
+
+
+func _build_save_data() -> Dictionary:
+	var resources: Array[Dictionary] = []
+	for child in get_children():
+		if child.get_script() != HARVESTABLE_SCRIPT:
+			continue
+		resources.append({
+			"id": String(child.get("resource_id")),
+			"gathers_left": int(child.get("gathers_left"))
+		})
+	return {
+		"format_version": SAVE_MANAGER_SCRIPT.FORMAT_VERSION,
+		"player": {
+			"position": _vector_to_array(player.global_position),
+			"rotation": _vector_to_array(player.global_rotation),
+			"camera_pitch": player.camera_pivot.rotation.x,
+			"health": health,
+			"hunger": hunger,
+			"thirst": thirst
+		},
+		"inventory": inventory.duplicate(true),
+		"world": {
+			"elapsed_game_time": elapsed_game_time,
+			"day_length_seconds": day_length_seconds,
+			"survival_tick": survival_tick,
+			"weather": weather_system.get_save_data(),
+			"resources": resources,
+			"structures": building_system.get_save_data(),
+			"wildlife": wildlife_system.get_save_data()
+		}
+	}
+
+
+func _restore_save_data(data: Dictionary) -> bool:
+	if not save_manager.validate_save_data(data):
+		return _reject_save_restore("Save data failed validation.")
+	var world_data: Dictionary = data["world"]
+	var resource_states: Variant = world_data["resources"]
+	if not building_system.validate_save_data(world_data["structures"]):
+		return _reject_save_restore("Saved shelter data is inconsistent.")
+	if not wildlife_system.validate_save_data(world_data["wildlife"]):
+		return _reject_save_restore("Saved wildlife data is inconsistent.")
+	if not weather_system.validate_save_data(world_data["weather"]):
+		return _reject_save_restore("Saved weather data is inconsistent.")
+	if not _validate_resource_save_data(resource_states):
+		return _reject_save_restore("Saved resource progress does not match this world.")
+
+	var player_data: Dictionary = data["player"]
+	player.global_position = _array_to_vector(player_data["position"])
+	player.global_rotation = _array_to_vector(player_data["rotation"])
+	player.camera_pivot.rotation.x = float(player_data["camera_pitch"])
+	health = float(player_data["health"])
+	hunger = float(player_data["hunger"])
+	thirst = float(player_data["thirst"])
+
+	inventory.clear()
+	for key in SAVE_MANAGER_SCRIPT.INVENTORY_KEYS:
+		inventory[key] = int(data["inventory"].get(key, 0))
+	elapsed_game_time = float(world_data["elapsed_game_time"])
+	day_length_seconds = float(world_data["day_length_seconds"])
+	survival_tick = float(world_data["survival_tick"])
+
+	var restored: bool = (
+		building_system.restore_save_data(world_data["structures"])
+		and wildlife_system.restore_save_data(world_data["wildlife"])
+		and weather_system.restore_save_data(world_data["weather"])
+		and _restore_resource_save_data(resource_states)
+	)
+	if not restored:
+		return _reject_save_restore("The validated save could not be fully restored.")
+	last_load_error = ""
+	weather_system.refresh_shelter_state()
+	_update_day_cycle()
+	_update_nearby_resource()
+	_update_hud()
+	_update_crafting_menu()
+	_update_continue_button()
+	return true
+
+
+func _reject_save_restore(message: String) -> bool:
+	last_load_error = message
+	return false
+
+
+func _validate_resource_save_data(data: Variant) -> bool:
+	if typeof(data) != TYPE_ARRAY:
+		return false
+	var resources_by_id: Dictionary = {}
+	for child in get_children():
+		if child.get_script() == HARVESTABLE_SCRIPT:
+			resources_by_id[String(child.get("resource_id"))] = child
+	if data.size() != resources_by_id.size():
+		return false
+	var seen: Dictionary = {}
+	for item in data:
+		if typeof(item) != TYPE_DICTIONARY:
+			return false
+		var resource_id := String(item.get("id", ""))
+		if not resources_by_id.has(resource_id) or seen.has(resource_id):
+			return false
+		var resource: Node3D = resources_by_id[resource_id]
+		var remaining: Variant = item.get("gathers_left")
+		if (
+			(typeof(remaining) != TYPE_INT and typeof(remaining) != TYPE_FLOAT)
+			or not is_finite(float(remaining))
+			or floorf(float(remaining)) != float(remaining)
+			or int(remaining) < 0
+			or int(remaining) > int(resource.get("max_gathers"))
+		):
+			return false
+		seen[resource_id] = true
+	return seen.size() == resources_by_id.size()
+
+
+func _restore_resource_save_data(data: Array) -> bool:
+	if not _validate_resource_save_data(data):
+		return false
+	var resources_by_id: Dictionary = {}
+	for child in get_children():
+		if child.get_script() == HARVESTABLE_SCRIPT:
+			resources_by_id[String(child.get("resource_id"))] = child
+	for item in data:
+		var resource: Node3D = resources_by_id[String(item["id"])]
+		resource.set("gathers_left", int(item["gathers_left"]))
+		resource.visible = int(item["gathers_left"]) > 0
+	return true
+
+
+func _update_continue_button() -> void:
+	if is_instance_valid(continue_game_button):
+		continue_game_button.disabled = not save_manager.has_valid_save()
+
+
+func _vector_to_array(value: Vector3) -> Array[float]:
+	return [value.x, value.y, value.z]
+
+
+func _array_to_vector(value: Array) -> Vector3:
+	return Vector3(float(value[0]), float(value[1]), float(value[2]))

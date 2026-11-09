@@ -45,6 +45,63 @@ func get_animals_of_type(type: String) -> Array[CharacterBody3D]:
 	return matching
 
 
+func get_save_data() -> Array[Dictionary]:
+	var saved_animals: Array[Dictionary] = []
+	for animal in animals:
+		if not is_instance_valid(animal):
+			continue
+		saved_animals.append({
+			"animal_type": animal.animal_type,
+			"position": _vector_to_array(animal.global_position),
+			"home_position": _vector_to_array(animal.home_position),
+			"state": animal.get_state_name()
+		})
+	return saved_animals
+
+
+func validate_save_data(data: Variant) -> bool:
+	if typeof(data) != TYPE_ARRAY or data.size() > 12:
+		return false
+	for item in data:
+		if typeof(item) != TYPE_DICTIONARY:
+			return false
+		if not ANIMAL_TYPES.has(String(item.get("animal_type", ""))):
+			return false
+		if not ["IDLE", "WANDER", "ALERT", "FLEE", "DEFEND", "RETURN"].has(String(item.get("state", ""))):
+			return false
+		if String(item["state"]) == "DEFEND" and String(item["animal_type"]) != "wild_boar":
+			return false
+		if not _is_vector_array(item.get("position")) or not _is_vector_array(item.get("home_position")):
+			return false
+		var saved_position := _array_to_vector(item["position"])
+		var saved_home := _array_to_vector(item["home_position"])
+		if Vector2(saved_position.x, saved_position.z).length() > island_radius + 1.0:
+			return false
+		if Vector2(saved_home.x, saved_home.z).length() > island_radius + 1.0:
+			return false
+	return true
+
+
+func restore_save_data(data: Array) -> bool:
+	if not validate_save_data(data):
+		return false
+	for animal in animals:
+		if is_instance_valid(animal):
+			remove_child(animal)
+			animal.free()
+	animals.clear()
+	for item in data:
+		var home := _array_to_vector(item["home_position"])
+		var animal: CharacterBody3D = ANIMAL_SCRIPT.new()
+		animal.configure(String(item["animal_type"]), player, home, obstacle_nodes, island_radius)
+		animal.position = _array_to_vector(item["position"])
+		add_child(animal)
+		if not animal.restore_saved_state(String(item["state"])):
+			return false
+		animals.append(animal)
+	return true
+
+
 func _spawn_animals() -> void:
 	for animal_type in ANIMAL_TYPES:
 		var spawn_position := _find_spawn_position()
@@ -111,3 +168,23 @@ func _raycast_ground(candidate: Vector3) -> Dictionary:
 
 func _horizontal_distance(a: Vector3, b: Vector3) -> float:
 	return Vector2(a.x - b.x, a.z - b.z).length()
+
+
+func _vector_to_array(value: Vector3) -> Array[float]:
+	return [value.x, value.y, value.z]
+
+
+func _array_to_vector(value: Array) -> Vector3:
+	return Vector3(float(value[0]), float(value[1]), float(value[2]))
+
+
+func _is_vector_array(value: Variant) -> bool:
+	if typeof(value) != TYPE_ARRAY or value.size() != 3:
+		return false
+	for component in value:
+		if typeof(component) != TYPE_INT and typeof(component) != TYPE_FLOAT:
+			return false
+		var number := float(component)
+		if not is_finite(number) or absf(number) > 10000.0:
+			return false
+	return true

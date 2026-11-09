@@ -97,6 +97,14 @@ func get_state_name() -> String:
 	return AnimalState.keys()[state]
 
 
+func restore_saved_state(state_name: String) -> bool:
+	var state_index := AnimalState.keys().find(state_name)
+	if state_index < 0:
+		return false
+	_set_state(state_index as AnimalState)
+	return true
+
+
 func _update_ai(delta: float) -> void:
 	state_elapsed += delta
 	var player_distance := INF
@@ -240,7 +248,7 @@ func _avoid_obstacles(destination: Vector3) -> Vector3:
 	forward = forward.normalized()
 	var avoidance := Vector3.ZERO
 	for obstacle in avoidance_nodes:
-		if not is_instance_valid(obstacle):
+		if not is_instance_valid(obstacle) or not obstacle.visible:
 			continue
 		var offset := global_position - obstacle.global_position
 		offset.y = 0.0

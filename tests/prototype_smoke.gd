@@ -4,6 +4,7 @@ const MAIN_SCENE := preload("res://scenes/main.tscn")
 const JOYSTICK_SCRIPT := preload("res://scripts/virtual_joystick.gd")
 const TOUCH_LOOK_SCRIPT := preload("res://scripts/touch_look.gd")
 const HARVESTABLE_SCRIPT := preload("res://scripts/harvestable.gd")
+const SAVE_TEST_PATH := "user://wildcraft_prototype_smoke_save.json"
 
 var test_failed := false
 
@@ -22,6 +23,8 @@ func _run() -> void:
 	var game: Node3D = MAIN_SCENE.instantiate()
 	mobile_viewport.add_child(game)
 	await process_frame
+	game.get("save_manager").save_path = SAVE_TEST_PATH
+	game.get("save_manager").delete_save(true)
 
 	var player: CharacterBody3D = game.get("player")
 	_check(player != null, "The main scene should spawn the player.")
@@ -217,6 +220,8 @@ func _run() -> void:
 	var building_game: Node3D = MAIN_SCENE.instantiate()
 	root.add_child(building_game)
 	await process_frame
+	building_game.get("save_manager").save_path = SAVE_TEST_PATH
+	building_game.get("save_manager").delete_save(true)
 	await physics_frame
 	await _test_building_system(building_game)
 
@@ -227,12 +232,13 @@ func _run() -> void:
 	_check(not String(game.get("time_label").text).is_empty(), "The day/night clock should update.")
 	await _test_wildlife(game)
 	await _test_weather(game, building_game)
+	await _test_save_system(building_game, game)
 
 	if test_failed:
-		push_error("Prototype, crafting, building, wildlife, or weather tests failed.")
+		push_error("Prototype, crafting, building, wildlife, weather, or save tests failed.")
 		quit(1)
 	else:
-		print("Prototype, crafting, building, wildlife, and weather smoke tests passed.")
+		print("Prototype, crafting, building, wildlife, weather, and save smoke tests passed.")
 		quit()
 
 
@@ -488,6 +494,203 @@ func _test_weather(game: Node3D, sheltered_game: Node3D) -> void:
 	print("PASS: weather states, transitions, effects, temperature, shelter protection, HUD, and mobile layout")
 
 
+func _test_save_system(game: Node3D, mobile_game: Node3D) -> void:
+	var save_manager: RefCounted = game.get("save_manager")
+	mobile_game.get("save_manager").save_path = SAVE_TEST_PATH
+	var mobile_viewport: SubViewport = mobile_game.get_parent()
+	mobile_viewport.size = Vector2i(360, 800)
+	await process_frame
+	_check(is_instance_valid(save_manager), "The game should initialize its local save manager.")
+	if not is_instance_valid(save_manager):
+		return
+	save_manager.delete_save(true)
+	mobile_game.call("_set_main_menu_open", true)
+	await process_frame
+	_check(mobile_game.get("continue_game_button").disabled, "Continue Game should be disabled when no valid save exists.")
+	var menu_rect: Rect2 = mobile_game.get("main_menu").get_global_rect()
+	_check(menu_rect.position.x >= 0.0 and menu_rect.end.x <= 360.0, "Main Menu should fit within a portrait mobile viewport.")
+	_check(menu_rect.position.y >= 0.0 and menu_rect.end.y <= 800.0, "Main Menu should fit within a portrait mobile viewport.")
+	mobile_viewport.size = Vector2i(800, 450)
+	await process_frame
+	menu_rect = mobile_game.get("main_menu").get_global_rect()
+	_check(menu_rect.position.x >= 0.0 and menu_rect.end.x <= 800.0, "Main Menu should fit within a landscape mobile viewport.")
+	_check(menu_rect.position.y >= 0.0 and menu_rect.end.y <= 450.0, "Main Menu should fit within a landscape mobile viewport.")
+	var menu_panel: Control = mobile_game.get("main_menu").get_child(1)
+	var menu_column: VBoxContainer = menu_panel.get_child(0)
+	for button_index in range(3, menu_column.get_child_count()):
+		var menu_button: Button = menu_column.get_child(button_index)
+		_check(menu_button.get_global_rect().size.y >= 44.0, "Main Menu actions should have touch-friendly target heights.")
+		_check(
+			menu_button.get_global_rect().position.y >= menu_panel.get_global_rect().position.y
+			and menu_button.get_global_rect().end.y <= menu_panel.get_global_rect().end.y,
+			"Main Menu actions should fit inside the panel in landscape."
+		)
+	mobile_viewport.size = Vector2i(360, 800)
+	await process_frame
+	mobile_game.call("_set_main_menu_open", false)
+
+	var player: CharacterBody3D = game.get("player")
+	player.global_position = Vector3(11.25, 2.4, -7.5)
+	player.global_rotation = Vector3(0.0, 0.72, 0.0)
+	player.camera_pivot.rotation.x = 0.24
+	game.set("health", 67.0)
+	game.set("hunger", 48.0)
+	game.set("thirst", 29.0)
+	game.set("elapsed_game_time", 86.5)
+	game.set("survival_tick", 0.65)
+	var inventory: Dictionary = game.get("inventory")
+	inventory.assign({
+		"wood": 21,
+		"fiber": 7,
+		"stone": 8,
+		"berries": 4,
+		"stone_axe": 2,
+		"campfire": 1,
+		"wooden_spear": 3
+	})
+
+	var weather: Node3D = game.get("weather_system")
+	weather.set_weather("STORM", 2.0)
+	weather.call("_process", 0.5)
+	weather.set("temperature", 17.4)
+	weather.set("weather_remaining", 25.0)
+
+	var resource_id := ""
+	for child in game.get_children():
+		if child.get_script() == HARVESTABLE_SCRIPT:
+			resource_id = String(child.get("resource_id"))
+			child.set("gathers_left", 1)
+			break
+	_check(not resource_id.is_empty(), "A stable resource should be available for save testing.")
+
+	var wildlife_system: Node3D = game.get("wildlife_system")
+	var animals: Array[CharacterBody3D] = wildlife_system.get_animals()
+	var saved_animal_position := animals[0].global_position + Vector3(1.0, 0.0, 0.0)
+	var saved_animal_type: String = animals[0].animal_type
+	animals[0].global_position = saved_animal_position
+	animals[0].restore_saved_state("WANDER")
+	var original_structure_count: int = game.get("building_system").placed_components.size()
+	_check(original_structure_count >= 6, "Shelter structures should exist before saving.")
+	_check(game.call("_save_current_game", false), "Saving a valid game should create a JSON save.")
+	_check(save_manager.has_save_file() and save_manager.has_valid_save(), "A completed save should exist and validate.")
+
+	var loaded: Dictionary = save_manager.load_game()
+	_check(loaded["success"], "The newly written save should load.")
+	var persisted_text_file := FileAccess.open(SAVE_TEST_PATH, FileAccess.READ)
+	if persisted_text_file == null:
+		_check(false, "The created JSON save should be readable.")
+		return
+	var valid_save_text := persisted_text_file.get_as_text()
+	persisted_text_file.close()
+	_check(
+		not save_manager.save_game({"format_version": 1})["success"],
+		"Invalid data must not be written over a valid save."
+	)
+	var after_invalid_save_file := FileAccess.open(SAVE_TEST_PATH, FileAccess.READ)
+	_check(
+		after_invalid_save_file.get_as_text() == valid_save_text,
+		"Rejecting invalid save data must preserve the previous valid file."
+	)
+	after_invalid_save_file.close()
+
+	mobile_game.call("_set_main_menu_open", true)
+	_check(not mobile_game.get("continue_game_button").disabled, "Continue Game should enable for a valid save.")
+	mobile_game.get("continue_game_button").pressed.emit()
+	_check(not mobile_game.get("main_menu").visible, "Continue Game should close the menu after loading.")
+	_check(
+		mobile_game.get("player").global_position.distance_to(Vector3(11.25, 2.4, -7.5)) < 0.01,
+		"Continue Game should restore player state through its menu action."
+	)
+	player.global_position = Vector3.ZERO
+	game.set("health", 100.0)
+	game.set("hunger", 100.0)
+	game.set("thirst", 100.0)
+	inventory["wood"] = 0
+	game.set("elapsed_game_time", 0.0)
+	game.get("building_system").restore_save_data([])
+	wildlife_system.restore_save_data([])
+	weather.set_weather("SUNNY", 0.1)
+	for child in game.get_children():
+		if child.get_script() == HARVESTABLE_SCRIPT:
+			child.set("gathers_left", 0)
+			child.hide()
+
+	_check(game.call("_restore_save_data", loaded["data"]), "A valid save should restore all supported game state.")
+	_check(player.global_position.distance_to(Vector3(11.25, 2.4, -7.5)) < 0.01, "Saved player position should be restored.")
+	_check(absf(player.rotation.y - 0.72) < 0.01, "Saved player rotation should be restored.")
+	_check(absf(player.camera_pivot.rotation.x - 0.24) < 0.01, "Saved camera pitch should be restored.")
+	_check(game.get("health") == 67.0 and game.get("hunger") == 48.0 and game.get("thirst") == 29.0, "Survival meters should be restored.")
+	_check(inventory["wood"] == 21 and inventory["stone_axe"] == 2, "Inventory resources and crafted items should be restored.")
+	_check(game.get("elapsed_game_time") == 86.5 and game.get("survival_tick") == 0.65, "Day/night and survival progress should be restored.")
+	_check(weather.get_weather_name() == "STORM" and absf(weather.get("temperature") - 17.4) < 0.01, "Weather state and temperature should be restored.")
+	_check(absf(weather.get("weather_remaining") - 25.0) < 0.01, "Remaining weather duration should be restored.")
+	_check(
+		absf(weather.get("transition_remaining") - float(loaded["data"]["world"]["weather"]["transition_remaining"])) < 0.01,
+		"In-progress weather transition should be restored."
+	)
+	_check(game.get("building_system").placed_components.size() == original_structure_count, "All shelter structures should be restored.")
+	var restored_structure_data: Array[Dictionary] = game.get("building_system").get_save_data()
+	for structure_index in range(restored_structure_data.size()):
+		var saved_structure: Dictionary = loaded["data"]["world"]["structures"][structure_index]
+		var restored_structure: Dictionary = restored_structure_data[structure_index]
+		_check(
+			restored_structure["component_id"] == saved_structure["component_id"]
+			and _array_to_vector(restored_structure["position"]).distance_to(_array_to_vector(saved_structure["position"])) < 0.01
+			and _array_to_vector(restored_structure["rotation"]).distance_to(_array_to_vector(saved_structure["rotation"])) < 0.01,
+			"Restored shelter components should preserve their types, world positions, and rotations."
+		)
+	for structure in game.get("building_system").placed_components:
+		_check(_collision_shape_count(structure) > 0, "Restored shelter structures should regain their collision shapes.")
+	_check(wildlife_system.get_animals().size() == animals.size(), "Wildlife count should be restored.")
+	var restored_animal: CharacterBody3D = wildlife_system.get_animals()[0]
+	_check(restored_animal.animal_type == saved_animal_type, "Wildlife type should be restored.")
+	_check(restored_animal.global_position.distance_to(saved_animal_position) < 0.01, "Wildlife position should be restored.")
+	_check(restored_animal.get_state_name() == "WANDER", "Wildlife AI state should be restored.")
+	var restored_resource: Node3D
+	for child in game.get_children():
+		if child.get_script() == HARVESTABLE_SCRIPT and child.get("resource_id") == resource_id:
+			restored_resource = child
+			break
+	_check(restored_resource != null and restored_resource.get("gathers_left") == 1, "Resource depletion progress should be restored.")
+	var restored_foundation: StaticBody3D = game.get("building_system").foundations.values()[0]
+	player.global_position = restored_foundation.global_position + Vector3(0.0, 0.31, 0.0)
+	weather.call("refresh_shelter_state")
+	_check(weather.get("is_player_sheltered"), "Restored complete shelters should continue to protect the player.")
+	print("PASS: JSON save creation, player/inventory/survival/world/shelter/wildlife restoration")
+
+	inventory["wood"] = 99
+	game.set("autosave_interval", 0.1)
+	game.set("autosave_elapsed", 0.0)
+	game.call("_process", 0.2)
+	var autosaved: Dictionary = save_manager.load_game()
+	_check(autosaved["success"] and autosaved["data"]["inventory"]["wood"] == 99, "Autosave should persist gameplay changes at its configured interval.")
+	print("PASS: interval autosave")
+
+	var corrupted_file := FileAccess.open(SAVE_TEST_PATH, FileAccess.WRITE)
+	corrupted_file.store_string("{not valid json")
+	corrupted_file.close()
+	_check(not save_manager.load_game()["success"], "Corrupted JSON should fail safely.")
+	_check(not save_manager.has_valid_save(), "A corrupted save must not enable Continue Game.")
+	mobile_game.call("_set_main_menu_open", true)
+	_check(mobile_game.get("continue_game_button").disabled, "Continue Game should disable for corrupted JSON.")
+	mobile_game.call("_set_main_menu_open", false)
+
+	var unsupported_file := FileAccess.open(SAVE_TEST_PATH, FileAccess.WRITE)
+	unsupported_file.store_string(JSON.stringify({"format_version": 99}))
+	unsupported_file.close()
+	_check(not save_manager.load_game()["success"], "An unsupported save version should be rejected.")
+	_check(not save_manager.delete_save(false)["success"], "Save deletion should require explicit confirmation.")
+	_check(save_manager.has_save_file(), "Unconfirmed deletion must leave the save file intact.")
+	mobile_game.call("_set_main_menu_open", true)
+	mobile_game.call("_request_save_deletion")
+	mobile_game.get("delete_confirmation_dialog").confirmed.emit()
+	_check(not save_manager.has_save_file(), "Confirming Delete Save should remove the local file.")
+	_check(not save_manager.load_game()["success"], "Loading a missing save should return a safe failure.")
+	_check(mobile_game.get("continue_game_button").disabled, "Continue Game should remain disabled after save deletion.")
+	mobile_game.call("_set_main_menu_open", false)
+	print("PASS: missing/corrupt/version validation, confirmed deletion, and Continue availability")
+
+
 func _test_wildlife(game: Node3D) -> void:
 	var wildlife_system: Node3D = game.get("wildlife_system")
 	_check(is_instance_valid(wildlife_system), "The main scene should initialize its wildlife system.")
@@ -540,6 +743,7 @@ func _test_wildlife(game: Node3D) -> void:
 	player.global_position = test_deer.global_position + Vector3(0.0, 0.0, 4.0)
 	test_deer.call("_update_ai", 0.3)
 	_check(test_deer.get_state_name() == "ALERT", "A deer should notice a nearby player before fleeing.")
+	test_deer.call("_set_state", 2)
 	player.global_position = test_deer.global_position + Vector3(0.0, 0.0, 13.0)
 	test_deer.call("_update_ai", 0.3)
 	_check(test_deer.get_state_name() == "RETURN", "A deer should stop reacting when the player leaves its detection range.")
@@ -552,8 +756,9 @@ func _test_wildlife(game: Node3D) -> void:
 	for frame_index in range(30):
 		await physics_frame
 	_check(test_deer.global_position.distance_to(player.global_position) > flee_start_distance + 0.7, "A fleeing deer should increase its distance from the player.")
+	test_deer.call("_set_state", 3)
 	player.global_position = test_deer.global_position + Vector3(35.0, 0.0, 0.0)
-	test_deer.call("_update_ai", 0.3)
+	test_deer.call("_update_deer_response", 35.0)
 	_check(test_deer.get_state_name() == "RETURN", "A deer should return toward its home area when the player is far away.")
 
 	var test_boar: CharacterBody3D = boars[0]
@@ -568,8 +773,9 @@ func _test_wildlife(game: Node3D) -> void:
 	for frame_index in range(30):
 		await physics_frame
 	_check(test_boar.global_position.distance_to(player.global_position) < defend_start_distance, "A defensive boar should move toward the nearby threat.")
+	test_boar.call("_set_state", 4)
 	player.global_position = test_boar.global_position + Vector3(25.0, 0.0, 0.0)
-	test_boar.call("_update_ai", 0.3)
+	test_boar.call("_update_boar_response", 25.0)
 	_check(test_boar.get_state_name() == "RETURN", "A boar should disengage and return when the player moves away.")
 	player.global_position = original_player_position
 
@@ -587,6 +793,10 @@ func _collision_shape_count(body: StaticBody3D) -> int:
 		if child is CollisionShape3D:
 			count += 1
 	return count
+
+
+func _array_to_vector(value: Array) -> Vector3:
+	return Vector3(float(value[0]), float(value[1]), float(value[2]))
 
 
 func _assert_crafting_layout(

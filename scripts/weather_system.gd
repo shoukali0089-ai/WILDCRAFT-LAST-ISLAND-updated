@@ -191,6 +191,75 @@ func get_display_text() -> String:
 	return "%s  •  %.1f C" % [icon_text, temperature]
 
 
+func get_save_data() -> Dictionary:
+	return {
+		"state": get_weather_name(),
+		"temperature": temperature,
+		"weather_remaining": weather_remaining,
+		"transition_remaining": transition_remaining,
+		"cloud_amount": cloud_amount,
+		"rain_amount": rain_amount,
+		"wind_strength": wind_strength,
+		"sunlight_multiplier": _current_sunlight,
+		"ambient_multiplier": _current_ambient
+	}
+
+
+func validate_save_data(data: Variant) -> bool:
+	if typeof(data) != TYPE_DICTIONARY:
+		return false
+	if not WEATHER_NAMES.has(String(data.get("state", ""))):
+		return false
+	var saved_temperature: Variant = data.get("temperature")
+	var saved_remaining: Variant = data.get("weather_remaining")
+	if not (
+		_is_number_in_range(saved_temperature, 0.0, 50.0)
+		and _is_number_in_range(saved_remaining, 0.0, 100000.0)
+	):
+		return false
+	var optional_ranges := {
+		"transition_remaining": Vector2(0.0, 60.0),
+		"cloud_amount": Vector2(0.0, 1.0),
+		"rain_amount": Vector2(0.0, 1.0),
+		"wind_strength": Vector2(0.0, 1.0),
+		"sunlight_multiplier": Vector2(0.0, 1.0),
+		"ambient_multiplier": Vector2(0.0, 1.0)
+	}
+	for key in optional_ranges:
+		if data.has(key) and not _is_number_in_range(data[key], optional_ranges[key].x, optional_ranges[key].y):
+			return false
+	return true
+
+
+func restore_save_data(data: Dictionary) -> bool:
+	if not validate_save_data(data):
+		return false
+	weather_state = WEATHER_NAMES.find(String(data["state"])) as WeatherState
+	_target_clouds = WEATHER_CLOUDS[weather_state]
+	_target_rain = WEATHER_RAIN[weather_state]
+	_target_wind = WEATHER_WIND[weather_state]
+	_target_sunlight = WEATHER_SUNLIGHT[weather_state]
+	_target_ambient = WEATHER_AMBIENT[weather_state]
+	cloud_amount = float(data.get("cloud_amount", _target_clouds))
+	rain_amount = float(data.get("rain_amount", _target_rain))
+	wind_strength = float(data.get("wind_strength", _target_wind))
+	_current_sunlight = float(data.get("sunlight_multiplier", _target_sunlight))
+	_current_ambient = float(data.get("ambient_multiplier", _target_ambient))
+	_from_clouds = cloud_amount
+	_from_rain = rain_amount
+	_from_wind = wind_strength
+	_from_sunlight = _current_sunlight
+	_from_ambient = _current_ambient
+	_transition_elapsed = 0.0
+	_transition_length = float(data.get("transition_remaining", 0.0))
+	transition_remaining = _transition_length
+	weather_remaining = float(data["weather_remaining"])
+	temperature = float(data["temperature"])
+	_apply_visuals()
+	weather_changed.emit(get_weather_name())
+	return true
+
+
 func set_daylight(value: float) -> void:
 	daylight = clampf(value, 0.0, 1.0)
 
@@ -402,3 +471,9 @@ func _apply_visuals() -> void:
 		0.25 + daylight * 0.48
 	) * _current_ambient
 
+
+func _is_number_in_range(value: Variant, minimum: float, maximum: float) -> bool:
+	if typeof(value) != TYPE_INT and typeof(value) != TYPE_FLOAT:
+		return false
+	var number := float(value)
+	return is_finite(number) and number >= minimum and number <= maximum

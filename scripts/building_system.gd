@@ -153,6 +153,100 @@ func is_position_sheltered(position: Vector3) -> bool:
 	return false
 
 
+func get_save_data() -> Array[Dictionary]:
+	var saved_structures: Array[Dictionary] = []
+	for structure in placed_components:
+		if not is_instance_valid(structure):
+			continue
+		saved_structures.append({
+			"component_id": String(structure.get_meta("component_id", "")),
+			"position": _vector_to_array(structure.global_position),
+			"rotation": _vector_to_array(structure.global_rotation),
+			"grid_key": String(structure.get_meta("grid_key", "")),
+			"edge_key": String(structure.get_meta("edge_key", "")),
+			"edge_name": String(structure.get_meta("edge_name", ""))
+		})
+	return saved_structures
+
+
+func validate_save_data(data: Variant) -> bool:
+	if typeof(data) != TYPE_ARRAY:
+		return false
+	var foundation_keys: Dictionary = {}
+	var edge_keys: Dictionary = {}
+	var roof_keys: Dictionary = {}
+	for item in data:
+		if typeof(item) != TYPE_DICTIONARY:
+			return false
+		var component_id := String(item.get("component_id", ""))
+		if not COMPONENTS.has(component_id):
+			return false
+		if not _is_vector_array(item.get("position")) or not _is_vector_array(item.get("rotation")):
+			return false
+		var grid_key := String(item.get("grid_key", ""))
+		var edge_key := String(item.get("edge_key", ""))
+		var edge_name := String(item.get("edge_name", ""))
+		match component_id:
+			"wooden_foundation":
+				if grid_key.is_empty() or foundation_keys.has(grid_key):
+					return false
+				foundation_keys[grid_key] = true
+			"wooden_wall", "wooden_door":
+				if grid_key.is_empty() or edge_key.is_empty() or not EDGE_NAMES.has(edge_name) or edge_keys.has(edge_key):
+					return false
+				edge_keys[edge_key] = grid_key
+			"wooden_roof":
+				if grid_key.is_empty() or roof_keys.has(grid_key):
+					return false
+				roof_keys[grid_key] = true
+	for grid_key in roof_keys:
+		if not foundation_keys.has(grid_key):
+			return false
+	for edge_key in edge_keys:
+		if not foundation_keys.has(edge_keys[edge_key]):
+			return false
+	return true
+
+
+func restore_save_data(data: Array) -> bool:
+	if not validate_save_data(data):
+		return false
+	for structure in placed_components:
+		if is_instance_valid(structure):
+			placed_root.remove_child(structure)
+			structure.free()
+	placed_components.clear()
+	foundations.clear()
+	edge_occupancy.clear()
+	roof_occupancy.clear()
+
+	for item in data:
+		var component_id := String(item["component_id"])
+		var structure: StaticBody3D = COMPONENT_SCRIPT.new()
+		structure.name = COMPONENTS[component_id]["name"].replace(" ", "")
+		structure.configure(component_id)
+		structure.set_meta("component_id", component_id)
+		structure.set_meta("grid_key", item["grid_key"])
+		structure.set_meta("edge_key", item["edge_key"])
+		structure.set_meta("edge_name", item["edge_name"])
+		placed_root.add_child(structure)
+		structure.global_position = _array_to_vector(item["position"])
+		structure.global_rotation = _array_to_vector(item["rotation"])
+		placed_components.append(structure)
+		match component_id:
+			"wooden_foundation":
+				foundations[item["grid_key"]] = structure
+			"wooden_wall", "wooden_door":
+				edge_occupancy[item["edge_key"]] = {
+					"component_id": component_id,
+					"grid_key": item["grid_key"],
+					"edge_name": item["edge_name"]
+				}
+			"wooden_roof":
+				roof_occupancy[item["grid_key"]] = structure
+	return true
+
+
 func _foundation_preview(target: Vector3, rotation_steps: int) -> Dictionary:
 	var grid_x := roundi(target.x / GRID_SIZE)
 	var grid_z := roundi(target.z / GRID_SIZE)
@@ -357,6 +451,26 @@ func _foundation_base(foundation: StaticBody3D) -> Vector3:
 
 func _grid_key(grid_x: int, grid_z: int) -> String:
 	return "%d:%d" % [grid_x, grid_z]
+
+
+func _vector_to_array(value: Vector3) -> Array[float]:
+	return [value.x, value.y, value.z]
+
+
+func _array_to_vector(value: Array) -> Vector3:
+	return Vector3(float(value[0]), float(value[1]), float(value[2]))
+
+
+func _is_vector_array(value: Variant) -> bool:
+	if typeof(value) != TYPE_ARRAY or value.size() != 3:
+		return false
+	for component in value:
+		if typeof(component) != TYPE_INT and typeof(component) != TYPE_FLOAT:
+			return false
+		var number := float(component)
+		if not is_finite(number) or absf(number) > 10000.0:
+			return false
+	return true
 
 
 func _edge_key(position: Vector3, edge_index: int) -> String:
