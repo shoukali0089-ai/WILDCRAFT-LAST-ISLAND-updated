@@ -7,6 +7,7 @@ const TOUCH_LOOK_SCRIPT := preload("res://scripts/touch_look.gd")
 const RECIPE_ICON_SCRIPT := preload("res://scripts/recipe_icon.gd")
 const CRAFTING_SYSTEM_SCRIPT := preload("res://scripts/crafting_system.gd")
 const BUILDING_SYSTEM_SCRIPT := preload("res://scripts/building_system.gd")
+const WILDLIFE_SYSTEM_SCRIPT := preload("res://scripts/wildlife_system.gd")
 
 const ISLAND_RADIUS := 48.0
 const TERRAIN_STEPS := 56
@@ -15,6 +16,7 @@ const GATHER_DISTANCE := 4.0
 var player: CharacterBody3D
 var terrain_body: StaticBody3D
 var building_system: Node3D
+var wildlife_system: Node3D
 var inventory := {"wood": 0, "fiber": 0, "stone": 0, "berries": 0}
 var health := 100.0
 var hunger := 100.0
@@ -65,6 +67,14 @@ func _ready() -> void:
 	building_system.name = "BuildingSystem"
 	add_child(building_system)
 	building_system.configure(terrain_body, player)
+	wildlife_system = WILDLIFE_SYSTEM_SCRIPT.new()
+	wildlife_system.name = "WildlifeSystem"
+	var wildlife_obstacles: Array[Node3D] = []
+	for child in get_children():
+		if child.get_script() == HARVESTABLE_SCRIPT:
+			wildlife_obstacles.append(child)
+	wildlife_system.configure(terrain_body, player, wildlife_obstacles, ISLAND_RADIUS)
+	add_child(wildlife_system)
 	_build_hud()
 
 

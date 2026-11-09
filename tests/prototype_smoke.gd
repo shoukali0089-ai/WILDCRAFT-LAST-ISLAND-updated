@@ -3,6 +3,7 @@ extends SceneTree
 const MAIN_SCENE := preload("res://scenes/main.tscn")
 const JOYSTICK_SCRIPT := preload("res://scripts/virtual_joystick.gd")
 const TOUCH_LOOK_SCRIPT := preload("res://scripts/touch_look.gd")
+const HARVESTABLE_SCRIPT := preload("res://scripts/harvestable.gd")
 
 var test_failed := false
 
@@ -224,12 +225,13 @@ func _run() -> void:
 	_check(game.get("hunger") < hunger_before, "Hunger should decrease over time.")
 	game.call("_update_day_cycle")
 	_check(not String(game.get("time_label").text).is_empty(), "The day/night clock should update.")
+	await _test_wildlife(game)
 
 	if test_failed:
-		push_error("Prototype, crafting, or building tests failed.")
+		push_error("Prototype, crafting, building, or wildlife tests failed.")
 		quit(1)
 	else:
-		print("Prototype, crafting, and building smoke tests passed.")
+		print("Prototype, crafting, building, and wildlife smoke tests passed.")
 		quit()
 
 
@@ -350,6 +352,28 @@ func _test_building_system(game: Node3D) -> void:
 	_check(space.intersect_ray(wall_crossing).get("collider") == wall, "A placed wall should block passage with its collision.")
 	print("PASS: door and roof placement, costs, collisions, and accessible doorway")
 
+	var wildlife_system: Node3D = game.get("wildlife_system")
+	var wildlife: Array[CharacterBody3D] = wildlife_system.get_animals()
+	var walking_animal: CharacterBody3D = wildlife[0]
+	var start_z := wall.global_position.z - 5.0
+	var animal_ground: Dictionary = building_system.call(
+		"_raycast_ground",
+		Vector3(wall.global_position.x, 0.0, start_z)
+	)
+	walking_animal.global_position = animal_ground["position"] + Vector3.UP * 0.04
+	walking_animal.call("_set_state", 1)
+	walking_animal.set("state_elapsed", 0.0)
+	walking_animal.set("state_duration", 20.0)
+	walking_animal.set(
+		"wander_target",
+		Vector3(wall.global_position.x, wall.global_position.y, wall.global_position.z + 1.5)
+	)
+	for frame_index in range(100):
+		await physics_frame
+	_check(walking_animal.global_position.z > start_z + 0.5, "An animal should move along the ground toward a target.")
+	_check(walking_animal.global_position.z < wall.global_position.z, "An animal should not walk through a solid shelter wall.")
+	print("PASS: animal movement and solid shelter collision")
+
 	var player: CharacterBody3D = game.get("player")
 	player.position = Vector3(door.global_position.x - 2.0, foundation.position.y + 0.31, door.global_position.z)
 	player.set_move_input(Vector2(1.0, 0.0))
@@ -362,6 +386,99 @@ func _test_building_system(game: Node3D) -> void:
 	_check(player.global_position.x < door.global_position.x - 0.4, "Player should re-enter through the open doorway.")
 	player.set_move_input(Vector2.ZERO)
 	print("PASS: player enters and exits through the shelter doorway")
+
+
+func _test_wildlife(game: Node3D) -> void:
+	var wildlife_system: Node3D = game.get("wildlife_system")
+	_check(is_instance_valid(wildlife_system), "The main scene should initialize its wildlife system.")
+	if not is_instance_valid(wildlife_system):
+		return
+	var animals: Array[CharacterBody3D] = wildlife_system.get_animals()
+	var deer: Array[CharacterBody3D] = wildlife_system.get_animals_of_type("deer")
+	var boars: Array[CharacterBody3D] = wildlife_system.get_animals_of_type("wild_boar")
+	_check(animals.size() == 4, "Wildlife should spawn a small fixed group of four animals.")
+	_check(deer.size() == 2 and boars.size() == 2, "Wildlife should include two deer and two wild boars.")
+	if deer.is_empty() or boars.is_empty():
+		return
+
+	var player: CharacterBody3D = game.get("player")
+	for animal in animals:
+		var collision: CollisionShape3D = animal.get_node_or_null("BodyCollision")
+		var spawn_position: Vector3 = animal.get("home_position")
+		_check(collision != null and collision.shape is CapsuleShape3D, "Each animal should have a simple capsule collision shape.")
+		_check((animal.collision_mask & 1) != 0, "Animals should collide with terrain and solid shelter structures.")
+		_check(animal.get_node("ProceduralModel").position.y < 0.07, "Animal procedural models should remain grounded while animating.")
+		_check(Vector2(spawn_position.x, spawn_position.z).length() < 43.0, "Animals should spawn within the playable island.")
+		_check(spawn_position.distance_to(player.global_position) > 10.0, "Animals should not spawn inside the player.")
+	for first_index in range(animals.size()):
+		for second_index in range(first_index + 1, animals.size()):
+			_check(animals[first_index].home_position.distance_to(animals[second_index].home_position) > 5.0, "Animals should spawn clear of one another.")
+	for child in game.get_children():
+		if child.get_script() != HARVESTABLE_SCRIPT:
+			continue
+		for animal in animals:
+			_check(
+				Vector2(animal.home_position.x - child.global_position.x, animal.home_position.z - child.global_position.z).length() > 3.0,
+				"Animals should not spawn inside trees, rocks, or bushes."
+			)
+	print("PASS: wildlife spawning, species counts, obstacle clearance, and collision setup")
+
+	var test_deer: CharacterBody3D = deer[0]
+	var original_player_position := player.global_position
+	player.global_position = test_deer.global_position + Vector3(0.0, 0.0, 30.0)
+	test_deer.call("_set_state", 0)
+	test_deer.set("state_elapsed", 0.0)
+	test_deer.set("state_duration", 0.01)
+	test_deer.call("_update_ai", 0.02)
+	_check(test_deer.get_state_name() == "WANDER", "An idle deer should transition to wandering.")
+	var deer_position_before_wander := test_deer.global_position
+	for frame_index in range(30):
+		await physics_frame
+	_check(test_deer.global_position.distance_to(deer_position_before_wander) > 0.2, "A wandering deer should move smoothly.")
+
+	test_deer.global_position += Vector3(5.0, 0.0, 0.0)
+	player.global_position = test_deer.global_position + Vector3(0.0, 0.0, 4.0)
+	test_deer.call("_update_ai", 0.3)
+	_check(test_deer.get_state_name() == "ALERT", "A deer should notice a nearby player before fleeing.")
+	player.global_position = test_deer.global_position + Vector3(0.0, 0.0, 13.0)
+	test_deer.call("_update_ai", 0.3)
+	_check(test_deer.get_state_name() == "RETURN", "A deer should stop reacting when the player leaves its detection range.")
+	player.global_position = test_deer.global_position + Vector3(0.0, 0.0, 4.0)
+	test_deer.call("_update_ai", 0.3)
+	_check(test_deer.get_state_name() == "ALERT", "A deer should notice the player again when approached.")
+	test_deer.call("_update_ai", 0.4)
+	_check(test_deer.get_state_name() == "FLEE", "A deer should flee after becoming alert.")
+	var flee_start_distance := test_deer.global_position.distance_to(player.global_position)
+	for frame_index in range(30):
+		await physics_frame
+	_check(test_deer.global_position.distance_to(player.global_position) > flee_start_distance + 0.7, "A fleeing deer should increase its distance from the player.")
+	player.global_position = test_deer.global_position + Vector3(35.0, 0.0, 0.0)
+	test_deer.call("_update_ai", 0.3)
+	_check(test_deer.get_state_name() == "RETURN", "A deer should return toward its home area when the player is far away.")
+
+	var test_boar: CharacterBody3D = boars[0]
+	test_boar.global_position += Vector3(5.0, 0.0, 0.0)
+	player.global_position = test_boar.global_position + Vector3(0.0, 0.0, 7.0)
+	test_boar.call("_update_ai", 0.3)
+	_check(test_boar.get_state_name() == "ALERT", "A boar should notice a player at a safe distance.")
+	player.global_position = test_boar.global_position + Vector3(0.0, 0.0, 3.0)
+	test_boar.call("_update_ai", 0.3)
+	_check(test_boar.get_state_name() == "DEFEND", "A boar should defend itself when approached closely.")
+	var defend_start_distance := test_boar.global_position.distance_to(player.global_position)
+	for frame_index in range(30):
+		await physics_frame
+	_check(test_boar.global_position.distance_to(player.global_position) < defend_start_distance, "A defensive boar should move toward the nearby threat.")
+	player.global_position = test_boar.global_position + Vector3(25.0, 0.0, 0.0)
+	test_boar.call("_update_ai", 0.3)
+	_check(test_boar.get_state_name() == "RETURN", "A boar should disengage and return when the player moves away.")
+	player.global_position = original_player_position
+
+	for frame_index in range(30):
+		await physics_frame
+	for animal in animals:
+		_check(Vector2(animal.global_position.x, animal.global_position.z).length() < 48.0, "Animals should remain within the island boundary.")
+	print("PASS: deer idle/wander/alert/flee/return and boar alert/defend/return transitions")
+	print("PASS: wildlife movement remains within island bounds")
 
 
 func _collision_shape_count(body: StaticBody3D) -> int:
